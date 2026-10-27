@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, shell } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, screen, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -14,6 +14,11 @@ const installedApps = new Map();
 const runningWindows = new Map();
 let notificationProcess;
 let appIsQuitting = false;
+let runningAppSelectionActive = false;
+let windowActivationProcess;
+let windowActivationReady;
+let nextWindowActivationRequestId = 0;
+const pendingWindowActivations = new Map();
 
 const windowApi = `
 using System;
@@ -68,6 +73,171 @@ function runPowerShell(script) {
       }
     });
   });
+}
+
+function createWindowActivationWorkerScript() {
+  return `
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$null = Add-Type -TypeDefinition @'
+${windowApi}
+'@
+[Console]::Out.WriteLine('{"ready":true}')
+[Console]::Out.Flush()
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  $request = $null
+  try {
+    $request = $line | ConvertFrom-Json
+    $hWnd = [IntPtr]([System.Convert]::ToInt64([string]$request.id, 16))
+    if (-not [PillWindowApi]::IsWindow($hWnd)) { throw 'The selected window is no longer available.' }
+    if ([PillWindowApi]::IsIconic($hWnd)) {
+      [void][PillWindowApi]::ShowWindowAsync($hWnd, 9)
+    }
+    if (-not [PillWindowApi]::SetForegroundWindow($hWnd)) {
+      throw 'Windows did not allow the selected app to become active.'
+    }
+    $response = @{ requestId = $request.requestId; success = $true }
+  } catch {
+    $response = @{ requestId = $request.requestId; error = $_.Exception.Message }
+  }
+  [Console]::Out.WriteLine((ConvertTo-Json -InputObject $response -Compress))
+  [Console]::Out.Flush()
+}`;
+}
+
+function startWindowActivationWorker() {
+  if (windowActivationProcess) {
+    return windowActivationReady;
+  }
+
+  const encodedScript = Buffer.from(createWindowActivationWorkerScript(), 'utf16le').toString('base64');
+  let resolveReady;
+  let rejectReady;
+  let readySettled = false;
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const settleStartupFailure = (error) => {
+    if (readySettled) {
+      return;
+    }
+    readySettled = true;
+    clearTimeout(startupTimeout);
+    rejectReady(error);
+  };
+  const worker = spawn('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-WindowStyle',
+    'Hidden',
+    '-EncodedCommand',
+    encodedScript,
+  ], { windowsHide: true });
+  const startupTimeout = setTimeout(() => {
+    settleStartupFailure(new Error('Timed out while starting the app activation worker.'));
+    worker.kill();
+  }, 10000);
+
+  windowActivationProcess = worker;
+  windowActivationReady = ready;
+  const output = readline.createInterface({ input: worker.stdout });
+  output.on('line', (line) => {
+    let response;
+    try {
+      response = JSON.parse(line);
+    } catch (error) {
+      console.error('Could not parse app activation worker output:', error);
+      worker.kill();
+      return;
+    }
+
+    if (response.ready === true) {
+      if (!readySettled) {
+        readySettled = true;
+        clearTimeout(startupTimeout);
+        resolveReady();
+      }
+      return;
+    }
+
+    const pending = pendingWindowActivations.get(response.requestId);
+    if (!pending) {
+      console.error('Received an unexpected app activation worker response.');
+      worker.kill();
+      return;
+    }
+    pendingWindowActivations.delete(response.requestId);
+    if (typeof response.error === 'string') {
+      pending.reject(new Error(response.error));
+    } else if (response.success === true) {
+      pending.resolve();
+    } else {
+      pending.reject(new Error('App activation worker returned an invalid response.'));
+    }
+  });
+  worker.stderr.setEncoding('utf8');
+  worker.stderr.on('data', (data) => {
+    console.error('App activation worker:', data.trim());
+  });
+  worker.on('error', (error) => {
+    settleStartupFailure(error);
+  });
+  worker.on('close', (code) => {
+    settleStartupFailure(new Error(`App activation worker exited before starting (code ${code}).`));
+    const error = new Error(`App activation worker exited (code ${code}).`);
+    for (const pending of pendingWindowActivations.values()) {
+      pending.reject(error);
+    }
+    pendingWindowActivations.clear();
+    output.close();
+    if (windowActivationProcess === worker) {
+      windowActivationProcess = undefined;
+      windowActivationReady = undefined;
+    }
+  });
+
+  return ready;
+}
+
+async function requestWindowActivation(id) {
+  await startWindowActivationWorker();
+  const requestId = ++nextWindowActivationRequestId;
+  const response = new Promise((resolve, reject) => {
+    pendingWindowActivations.set(requestId, { resolve, reject });
+  });
+  const request = JSON.stringify({ requestId, id });
+  if (!windowActivationProcess || !windowActivationProcess.stdin.writable) {
+    pendingWindowActivations.delete(requestId);
+    throw new Error('App activation worker is not available.');
+  }
+  windowActivationProcess.stdin.write(`${request}\n`, (error) => {
+    if (error) {
+      const pending = pendingWindowActivations.get(requestId);
+      if (pending) {
+        pendingWindowActivations.delete(requestId);
+        pending.reject(error);
+      }
+    }
+  });
+  await response;
+}
+
+async function activateRunningWindowOnce(id) {
+  await runPowerShell(createWindowScript(
+    { id },
+    `
+  $hWnd = [IntPtr]([System.Convert]::ToInt64([string]$request.id, 16))
+  if (-not [PillWindowApi]::IsWindow($hWnd)) { throw 'The selected window is no longer available.' }
+  if ([PillWindowApi]::IsIconic($hWnd)) {
+    [void][PillWindowApi]::ShowWindowAsync($hWnd, 9)
+  }
+  if (-not [PillWindowApi]::SetForegroundWindow($hWnd)) {
+    throw 'Windows did not allow the selected app to become active.'
+  }
+`,
+  ));
 }
 
 function createWindowScript(request, body) {
@@ -382,6 +552,29 @@ async function toggleRunningWindow(id) {
   ));
 }
 
+async function activateRunningWindow(id) {
+  if (process.platform !== 'win32') {
+    throw new Error('Running window management is only supported on Windows.');
+  }
+  if (!runningWindows.has(id)) {
+    throw new Error('The selected window is no longer available.');
+  }
+
+  try {
+    await requestWindowActivation(id);
+  } catch (error) {
+    console.error('App activation worker failed; retrying with one-shot activation:', error);
+    try {
+      await activateRunningWindowOnce(id);
+    } catch (fallbackError) {
+      throw new Error(
+        `Could not activate the selected app using the worker or fallback: ${fallbackError.message}`,
+        { cause: error },
+      );
+    }
+  }
+}
+
 async function findStartMenuShortcuts(directory) {
   let entries;
   try {
@@ -511,6 +704,14 @@ function createWindow() {
       window.setIgnoreMouseEvents(true, { forward: true });
     }
   });
+  ipcMain.handle('pill:focus-window', (event) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized pill focus request');
+    }
+    window.setIgnoreMouseEvents(false);
+    window.focus();
+    window.webContents.focus();
+  });
   ipcMain.handle('pill:set-notification-open', (event, isOpen) => {
     if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
       throw new Error('Invalid notification window request');
@@ -592,6 +793,21 @@ function createWindow() {
     }
     await toggleRunningWindow(id);
   });
+  ipcMain.handle('pill:activate-running-window', async (event, id) => {
+    if (
+      event.sender !== window.webContents
+      || typeof id !== 'string'
+      || !/^[0-9A-Fa-f]+$/.test(id)
+    ) {
+      throw new Error('Invalid running window request');
+    }
+    await activateRunningWindow(id);
+  });
+  ipcMain.on('pill:running-selection-ended', (event) => {
+    if (event.sender === window.webContents) {
+      runningAppSelectionActive = false;
+    }
+  });
   ipcMain.handle('pill:get-volume', (event) => {
     if (event.sender !== window.webContents) {
       throw new Error('Unauthorized volume request');
@@ -616,6 +832,35 @@ function createWindow() {
   window.loadFile(path.join(__dirname, 'index.html'));
   window.once('ready-to-show', () => window.show());
   window.once('ready-to-show', () => startNotificationListener(window));
+
+  const sendShortcut = (action, data) => {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send('pill:shortcut', action, data);
+    }
+  };
+  if (!globalShortcut.register('Alt+Space', () => sendShortcut('apps-menu'))) {
+    console.error('Could not register the Alt+Space shortcut.');
+  }
+  if (!globalShortcut.register('Alt+Shift+W', () => sendShortcut('toggle-idle-visibility'))) {
+    console.error('Could not register the Alt+Shift+W shortcut.');
+  }
+  if (!globalShortcut.register('Alt+Shift+Q', () => {
+    if (runningAppSelectionActive) {
+      sendShortcut('running-apps-cycle');
+      return;
+    }
+    runningAppSelectionActive = true;
+    const runningAppsPromise = getRunningWindows();
+    sendShortcut('running-apps-start');
+    runningAppsPromise.then((runningApps) => {
+      sendShortcut('running-apps-loaded', runningApps);
+    }).catch((error) => {
+      console.error('Could not load running apps for keyboard selection:', error);
+      sendShortcut('running-apps-error');
+    });
+  })) {
+    console.error('Could not register the Alt+Shift+Q shortcut.');
+  }
 }
 
 function startNotificationListener(window) {
@@ -688,7 +933,14 @@ function startNotificationListener(window) {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  if (process.platform === 'win32') {
+    startWindowActivationWorker().catch((error) => {
+      console.error('Could not start app activation worker:', error);
+    });
+  }
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (notificationProcess) {
@@ -702,6 +954,12 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   appIsQuitting = true;
+  globalShortcut.unregisterAll();
+  if (windowActivationProcess) {
+    windowActivationProcess.kill();
+    windowActivationProcess = undefined;
+    windowActivationReady = undefined;
+  }
   if (notificationProcess) {
     notificationProcess.kill();
     notificationProcess = undefined;

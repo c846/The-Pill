@@ -8,6 +8,9 @@ const appsList = document.querySelector('.apps-list');
 const appsStatus = document.querySelector('.apps-status');
 const runningAppsList = document.querySelector('.running-apps-list');
 const runningAppsStatus = document.querySelector('.running-apps-status');
+const runningAppSelector = document.querySelector('.running-app-selector');
+const runningAppSelectorTitle = document.querySelector('.running-app-selector-title');
+const runningAppSelectorLoading = document.querySelector('.running-app-selector-loading');
 const volumeToggle = document.querySelector('.volume-toggle');
 const volumeControls = document.querySelector('.volume-controls');
 const volumeSlider = document.querySelector('.volume-slider');
@@ -34,6 +37,15 @@ let expanded = false;
 let animating = false;
 let opening = false;
 let installedApps = [];
+let runningApps = [];
+let runningAppSelectionIndex = -1;
+let pendingRunningAppCycles = 0;
+let runningAppSelectionLoading = false;
+let runningAppSelectionDataReady = false;
+let runningAppSelectionPillReady = false;
+let runningAppSelectionCommitPending = false;
+let keyboardSelectionActive = false;
+let keyboardPinned = false;
 let runningRefreshTimer;
 let refreshingRunningApps = false;
 let musicRefreshTimer;
@@ -41,6 +53,7 @@ let refreshingMusic = false;
 let controllingMusic = false;
 let currentMediaSession;
 let notificationTimer;
+let notificationClosingTimer;
 let notificationQueue = [];
 let notificationOpen = false;
 let currentNotification;
@@ -77,9 +90,14 @@ function showNextNotification() {
     notificationToast.setAttribute('aria-hidden', 'true');
     notificationToast.inert = true;
     pill.classList.remove('notification-open');
+    pill.classList.add('notification-closing');
+    clearTimeout(notificationClosingTimer);
     window.pillApp.setNotificationOpen(false).catch((error) => {
       console.error('Failed to resize the pill after a notification:', error);
     });
+    notificationClosingTimer = setTimeout(() => {
+      pill.classList.remove('notification-closing');
+    }, 320);
     window.pillApp.setInteractive(expanded);
     if (expanded && !pill.matches(':hover')) {
       collapsePill();
@@ -105,12 +123,37 @@ function showNextNotification() {
     : setTimeout(showNextNotification, 7000);
 }
 
+async function minimizeNotificationForAppSwitch() {
+  if (!notificationOpen) {
+    return;
+  }
+
+  clearTimeout(notificationTimer);
+  notificationTimer = undefined;
+  notificationOpen = false;
+  currentNotification = undefined;
+  notificationToast.setAttribute('aria-hidden', 'true');
+  notificationToast.inert = true;
+  pill.classList.remove('notification-open');
+  pill.classList.add('notification-closing');
+  clearTimeout(notificationClosingTimer);
+  notificationClosingTimer = setTimeout(() => {
+    pill.classList.remove('notification-closing');
+  }, 320);
+
+  try {
+    await window.pillApp.setNotificationOpen(false);
+  } catch (error) {
+    console.error('Failed to minimize notification for app switching:', error);
+  }
+}
+
 function enqueueNotification(notification) {
   if (notificationQueue.length >= 20) {
     notificationQueue.shift();
   }
   notificationQueue.push(notification);
-  if (!notificationOpen) {
+  if (!notificationOpen && !keyboardSelectionActive) {
     showNextNotification();
   }
 }
@@ -151,6 +194,8 @@ window.pillApp.onNotificationListenerStatus((status) => {
     });
   }
 });
+
+window.addEventListener('blur', cancelRunningAppSelection);
 
 function waitForPillTransition() {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -414,9 +459,12 @@ async function refreshRunningApps() {
     return;
   }
   refreshingRunningApps = true;
-  refreshingRunningApps = true;
   try {
-    const runningApps = await window.pillApp.getRunningWindows();
+    const apps = await window.pillApp.getRunningWindows();
+    if (keyboardSelectionActive) {
+      return;
+    }
+    runningApps = apps;
     renderRunningApps(runningApps);
   } catch (error) {
     runningAppsStatus.textContent = 'Could not load open apps.';
@@ -425,6 +473,273 @@ async function refreshRunningApps() {
     refreshingRunningApps = false;
   }
 }
+
+function renderRunningAppSelection(animate = false) {
+  const selectedApp = runningApps[runningAppSelectionIndex];
+  const title = selectedApp?.title || (runningAppSelectionDataReady ? 'No open apps found' : '');
+  runningAppSelectorLoading.hidden = runningAppSelectionDataReady;
+  if (animate && title !== runningAppSelectorTitle.textContent) {
+    animateRunningAppTitle(title);
+  } else {
+    runningAppSelectorTitle.textContent = title;
+  }
+}
+
+function animateRunningAppTitle(title) {
+  const outgoingTitles = runningAppSelector.querySelectorAll('.running-app-selector-title-outgoing');
+  for (const outgoingTitle of outgoingTitles) {
+    outgoingTitle.getAnimations().forEach((animation) => animation.cancel());
+    outgoingTitle.remove();
+  }
+  runningAppSelectorTitle.getAnimations().forEach((animation) => animation.cancel());
+
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    runningAppSelectorTitle.textContent = title;
+    return;
+  }
+
+  const outgoingTitle = runningAppSelectorTitle.cloneNode(true);
+  outgoingTitle.classList.add('running-app-selector-title-outgoing');
+  outgoingTitle.setAttribute('aria-hidden', 'true');
+  runningAppSelector.append(outgoingTitle);
+  runningAppSelectorTitle.textContent = title;
+
+  outgoingTitle.animate(
+    [{ opacity: 1 }, { opacity: 0 }],
+    { duration: 180, easing: 'ease-out' },
+  ).onfinish = () => outgoingTitle.remove();
+  runningAppSelectorTitle.animate(
+    [
+      { opacity: 0, transform: 'translateX(24px)' },
+      { opacity: 1, transform: 'translateX(0)' },
+    ],
+    { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+  );
+}
+
+function updateRunningAppSelectionReadiness() {
+  runningAppSelectionLoading = !runningAppSelectionDataReady || !runningAppSelectionPillReady;
+  if (!runningAppSelectionLoading && runningAppSelectionCommitPending) {
+    runningAppSelectionCommitPending = false;
+    finishRunningAppSelection();
+  }
+}
+
+function advanceRunningAppSelection() {
+  if (!keyboardSelectionActive) {
+    return;
+  }
+  if (!runningAppSelectionDataReady) {
+    pendingRunningAppCycles += 1;
+    return;
+  }
+  if (runningApps.length === 0) {
+    return;
+  }
+
+  runningAppSelectionIndex = (runningAppSelectionIndex + 1) % runningApps.length;
+  renderRunningAppSelection(true);
+}
+
+async function openAppsMenuFromShortcut() {
+  keyboardPinned = true;
+  if (!expanded) {
+    try {
+      await window.pillApp.setExpanded(true);
+    } catch (error) {
+      keyboardPinned = false;
+      console.error('Failed to expand pill for the apps menu:', error);
+      return;
+    }
+    expanded = true;
+    pill.setAttribute('aria-expanded', 'true');
+  }
+  window.pillApp.setInteractive(true);
+  if (pill.classList.contains('music-open')) {
+    setMusicControlsOpen(false, false);
+  }
+  setVolumeControlsOpen(false);
+  setAppsControlsOpen(true);
+  appsStatus.textContent = 'Loading apps...';
+  appsSearch.value = '';
+  try {
+    installedApps = await window.pillApp.getApps();
+    if (appsControls.classList.contains('is-open')) {
+      renderApps();
+      appsSearch.focus();
+    }
+  } catch (error) {
+    appsStatus.textContent = 'Could not load installed apps.';
+    console.error('Failed to load installed apps:', error);
+  }
+}
+
+async function startRunningAppSelection() {
+  if (keyboardSelectionActive) {
+    return;
+  }
+
+  keyboardSelectionActive = true;
+  keyboardPinned = true;
+  runningAppSelectionLoading = true;
+  runningAppSelectionDataReady = false;
+  runningAppSelectionPillReady = false;
+  runningAppSelectionCommitPending = false;
+  pendingRunningAppCycles = 0;
+  await minimizeNotificationForAppSwitch();
+  runningApps = [];
+  runningAppSelectionIndex = -1;
+  runningAppSelectorTitle.textContent = '';
+  renderRunningAppSelection();
+  runningAppSelector.setAttribute('aria-hidden', 'false');
+  runningAppSelector.inert = false;
+  pill.classList.add('running-selector-open');
+  if (pill.classList.contains('music-open')) {
+    setMusicControlsOpen(false, false);
+  }
+  setVolumeControlsOpen(false);
+  if (appsControls.classList.contains('is-open')) {
+    setAppsControlsOpen(false, false);
+    finishAppsClosing();
+  }
+  appsSearch.blur();
+  clearInterval(runningRefreshTimer);
+  const focusPromise = window.pillApp.focusWindow();
+  try {
+    await window.pillApp.setExpanded(true);
+    expanded = true;
+    pill.setAttribute('aria-expanded', 'true');
+  } catch (error) {
+    keyboardSelectionActive = false;
+    keyboardPinned = false;
+    runningAppSelectionLoading = false;
+    window.pillApp.endRunningAppSelection();
+    pill.classList.remove('running-selector-open');
+    runningAppSelector.setAttribute('aria-hidden', 'true');
+    runningAppSelector.inert = true;
+    console.error('Failed to expand pill for running app selection:', error);
+    return;
+  }
+  try {
+    await focusPromise;
+  } catch (error) {
+    keyboardSelectionActive = false;
+    keyboardPinned = false;
+    runningAppSelectionLoading = false;
+    window.pillApp.endRunningAppSelection();
+    pill.classList.remove('running-selector-open');
+    runningAppSelector.setAttribute('aria-hidden', 'true');
+    runningAppSelector.inert = true;
+    console.error('Failed to focus pill for running app selection:', error);
+    collapsePill();
+    return;
+  }
+  if (!keyboardSelectionActive) {
+    collapsePill();
+    return;
+  }
+  window.pillApp.setInteractive(true);
+  runningAppSelectionPillReady = true;
+  updateRunningAppSelectionReadiness();
+}
+
+function loadRunningAppSelection(apps) {
+  if (!keyboardSelectionActive) {
+    return;
+  }
+  runningApps = apps.filter((app) => (
+    app
+    && typeof app.id === 'string'
+    && typeof app.title === 'string'
+  ));
+  runningAppSelectionIndex = runningApps.findIndex((app) => app.active);
+  if (runningAppSelectionIndex < 0 && runningApps.length > 0) {
+    runningAppSelectionIndex = 0;
+  }
+  runningAppSelectionDataReady = true;
+  if (runningApps.length > 0 && pendingRunningAppCycles > 0) {
+    runningAppSelectionIndex = (
+      runningAppSelectionIndex + pendingRunningAppCycles
+    ) % runningApps.length;
+  }
+  pendingRunningAppCycles = 0;
+  renderRunningAppSelection();
+  updateRunningAppSelectionReadiness();
+}
+
+async function finishRunningAppSelection() {
+  if (!keyboardSelectionActive) {
+    return;
+  }
+  if (runningAppSelectionLoading) {
+    runningAppSelectionCommitPending = true;
+    return;
+  }
+
+  keyboardSelectionActive = false;
+  keyboardPinned = false;
+  const selectedApp = runningApps[runningAppSelectionIndex];
+  pill.classList.remove('running-selector-open');
+  runningAppSelector.setAttribute('aria-hidden', 'true');
+  runningAppSelector.inert = true;
+  window.pillApp.endRunningAppSelection();
+  collapsePill();
+  if (selectedApp) {
+    window.pillApp.activateRunningWindow(selectedApp.id).catch((error) => {
+      console.error('Failed to activate selected running app:', error);
+    });
+  }
+}
+
+function cancelRunningAppSelection() {
+  if (!keyboardSelectionActive) {
+    return;
+  }
+
+  keyboardSelectionActive = false;
+  keyboardPinned = false;
+  runningAppSelectionLoading = false;
+  runningAppSelectionCommitPending = false;
+  pendingRunningAppCycles = 0;
+  pill.classList.remove('running-selector-open');
+  runningAppSelector.setAttribute('aria-hidden', 'true');
+  runningAppSelector.inert = true;
+  window.pillApp.endRunningAppSelection();
+  collapsePill();
+}
+
+window.pillApp.onShortcut((action, data) => {
+  if (action === 'apps-menu') {
+    openAppsMenuFromShortcut();
+  } else if (action === 'toggle-idle-visibility') {
+    pill.classList.toggle('idle-transparent');
+  } else if (action === 'running-apps-start') {
+    startRunningAppSelection();
+  } else if (action === 'running-apps-cycle') {
+    advanceRunningAppSelection();
+  } else if (action === 'running-apps-loaded') {
+    loadRunningAppSelection(data);
+  } else if (action === 'running-apps-error') {
+    if (keyboardSelectionActive) {
+      runningApps = [];
+      runningAppSelectionIndex = -1;
+      runningAppSelectionDataReady = true;
+      runningAppSelectorLoading.hidden = true;
+      runningAppSelectorTitle.textContent = 'Could not load open apps';
+      updateRunningAppSelectionReadiness();
+    }
+  }
+});
+
+window.addEventListener('keyup', (event) => {
+  if (
+    keyboardSelectionActive
+    && ['AltLeft', 'AltRight', 'ShiftLeft', 'ShiftRight'].includes(event.code)
+    && (!event.altKey || !event.shiftKey)
+  ) {
+    finishRunningAppSelection();
+  }
+}, true);
 
 function finishAppsClosing() {
   pill.classList.remove('apps-open', 'apps-closing', 'apps-content-ready');
@@ -447,6 +762,7 @@ function setAppsControlsOpen(isOpen, resizeWindow = true) {
         pill.classList.add('apps-content-ready');
       }
     });
+    clearInterval(runningRefreshTimer);
     refreshRunningApps();
     runningRefreshTimer = setInterval(refreshRunningApps, 5000);
   } else {
@@ -470,7 +786,7 @@ function setAppsControlsOpen(isOpen, resizeWindow = true) {
 }
 
 async function collapsePill() {
-  if (!expanded || animating) {
+  if (!expanded || animating || keyboardSelectionActive) {
     return;
   }
 
@@ -492,8 +808,13 @@ async function collapsePill() {
     finishAppsClosing();
   }
   pill.classList.remove('music-closing');
-  await window.pillApp.setExpanded(false);
-  animating = false;
+  try {
+    await window.pillApp.setExpanded(false);
+  } catch (error) {
+    console.error('Failed to collapse pill window:', error);
+  } finally {
+    animating = false;
+  }
 }
 
 async function expandPill() {
@@ -520,6 +841,7 @@ async function expandPill() {
 }
 
 pill.addEventListener('mouseenter', () => {
+  keyboardPinned = false;
   if (notificationOpen) {
     return;
   }
@@ -530,6 +852,13 @@ pill.addEventListener('mouseenter', () => {
 
 pill.addEventListener('mouseleave', () => {
   if (notificationOpen) {
+    return;
+  }
+  if (keyboardSelectionActive) {
+    return;
+  }
+  if (keyboardPinned) {
+    keyboardPinned = false;
     return;
   }
   if (expanded) {
@@ -547,6 +876,7 @@ pill.addEventListener('click', (event) => {
   }
 
   if (expanded) {
+    keyboardPinned = false;
     collapsePill();
   } else {
     expandPill();

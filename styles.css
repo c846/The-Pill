@@ -98,6 +98,10 @@ button.app-result:hover:not(:disabled) {
   height: 6px;
 }
 
+.pill.idle-transparent[aria-expanded="false"]:not(:hover):not(.notification-open) {
+  opacity: 0;
+}
+
 .pill-content {
   display: none;
 }
@@ -169,6 +173,10 @@ button.app-result:hover:not(:disabled) {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.92),
     inset 0 -1px 0 rgba(148, 169, 207, 0.24);
+}
+
+.pill.notification-closing {
+  border-radius: 24px;
 }
 
 .notification-toast {
@@ -1042,6 +1050,91 @@ button.app-result:hover:not(:disabled) {
   font-size: 10px;
 }
 
+.running-app-selector {
+  display: none;
+}
+
+.pill.running-selector-open .pill-content {
+  align-items: stretch;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+}
+
+.pill.running-selector-open .pill-content > :not(.running-app-selector) {
+  display: none;
+}
+
+.pill.running-selector-open .running-app-selector {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  gap: 3px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.running-app-selector-title-outgoing {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  transform: translate(-50%, -50%);
+}
+
+.running-app-selector-title {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.running-app-selector-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 18px;
+}
+
+.running-app-selector-loading[hidden] {
+  display: none;
+}
+
+.running-app-selector-loading span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: running-app-loading-hop 700ms ease-in-out infinite;
+}
+
+.running-app-selector-loading span:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.running-app-selector-loading span:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+@keyframes running-app-loading-hop {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+
+  30% {
+    transform: translateY(-5px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pill {
     transition: none;
@@ -1052,9 +1145,14 @@ button.app-result:hover:not(:disabled) {
   button,
   .music-artwork-wrap,
   .running-apps,
+  .running-app-selector,
   .apps-search,
   .notification-toast {
     transition: none;
+  }
+
+  .running-app-selector-loading span {
+    animation: none;
   }
 
   button:hover:not(:disabled) {

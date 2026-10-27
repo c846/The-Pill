@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#ffffff" />
+    <title>The Pill</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="pill" role="group" aria-label="The Pill" aria-expanded="false">
+      <div class="pill-content">
+        <div class="apps-main">
+        <div class="pill-actions">
+          <button class="apps-toggle" type="button" aria-label="Apps" aria-expanded="false" aria-controls="apps-controls">
+            <img src="pillicons/option.png" alt="" aria-hidden="true" />
+          </button>
+          <button class="volume-toggle" type="button" aria-label="Volume" aria-expanded="false" aria-controls="volume-controls">
+            <img src="pillicons/volume.png" alt="" aria-hidden="true" />
+          </button>
+          <button class="music-toggle" type="button" aria-label="Music" aria-expanded="false" aria-controls="music-controls">
+            <img src="pillicons/music.png" alt="" aria-hidden="true" />
+          </button>
+        </div>
+        <div class="volume-controls" id="volume-controls" aria-hidden="true" inert>
+          <input class="volume-slider" id="volume-slider" type="range" min="0" max="100" step="1" value="50" aria-label="System volume" disabled />
+          <output class="volume-value" for="volume-slider">--%</output>
+          <span class="volume-error" role="status" aria-live="polite"></span>
+        </div>
+        <div class="apps-controls" id="apps-controls" aria-hidden="true" inert>
+          <input class="apps-search" type="search" placeholder="Search installed apps" aria-label="Search installed apps" autocomplete="off" />
+          <div class="apps-list" role="listbox" aria-label="Installed apps"></div>
+          <span class="apps-status" role="status" aria-live="polite"></span>
+        </div>
+        </div>
+        <section class="music-controls" id="music-controls" aria-hidden="true" inert aria-label="Music player">
+          <div class="music-artwork-wrap">
+            <img class="music-artwork" alt="" />
+            <img class="music-artwork-placeholder" src="pillicons/music.png" alt="" aria-hidden="true" />
+          </div>
+          <div class="music-details">
+            <span class="music-title">Nothing playing</span>
+            <span class="music-artist"></span>
+            <span class="music-album"></span>
+            <span class="music-status" role="status" aria-live="polite">Finds music playing in Windows apps.</span>
+            <div class="music-actions">
+              <button class="music-previous" type="button" aria-label="Previous track" disabled>
+                <img src="pillicons/back.png" alt="" aria-hidden="true" />
+              </button>
+              <button class="music-play-pause" type="button" aria-label="Play or pause" disabled>
+                <img class="music-play-pause-icon" src="pillicons/play.png" alt="" aria-hidden="true" />
+              </button>
+              <button class="music-next" type="button" aria-label="Next track" disabled>
+                <img src="pillicons/next.png" alt="" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        </section>
+        <div class="pill-datetime">
+          <time class="pill-date" aria-label="Current date"></time>
+          <time class="pill-clock" aria-label="Current time"></time>
+        </div>
+        <section class="running-apps" aria-label="Running apps">
+          <div class="running-apps-header">
+            <span>Running apps</span>
+          </div>
+          <div class="running-apps-list" role="list"></div>
+          <span class="running-apps-status" role="status" aria-live="polite"></span>
+        </section>
+      </div>
+    </div>
+    <script src="renderer.js"></script>
+  </body>
+</html>

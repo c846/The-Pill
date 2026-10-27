@@ -9,6 +9,17 @@
   </head>
   <body>
     <div class="pill" role="group" aria-label="The Pill" aria-expanded="false">
+      <section class="notification-toast" aria-label="Windows notification" aria-hidden="true" inert>
+        <div class="notification-header">
+          <span class="notification-app"></span>
+          <button class="notification-close" type="button" aria-label="Dismiss notification">×</button>
+        </div>
+        <div class="notification-content">
+          <strong class="notification-title"></strong>
+          <p class="notification-message"></p>
+        </div>
+        <button class="notification-settings" type="button" hidden>Open notification settings</button>
+      </section>
       <div class="pill-content">
         <div class="apps-main">
         <div class="pill-actions">

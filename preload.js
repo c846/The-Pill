@@ -13,4 +13,16 @@ contextBridge.exposeInMainWorld('pillApp', {
   toggleRunningWindow: (id) => ipcRenderer.invoke('pill:toggle-running-window', id),
   getMediaSession: () => ipcRenderer.invoke('pill:get-media-session'),
   controlMediaSession: (sessionId, action) => ipcRenderer.invoke('pill:control-media-session', sessionId, action),
+  openNotificationSettings: () => ipcRenderer.invoke('pill:open-notification-settings'),
+  setNotificationOpen: (isOpen) => ipcRenderer.invoke('pill:set-notification-open', isOpen),
+  onNotification: (callback) => {
+    const listener = (_event, notification) => callback(notification);
+    ipcRenderer.on('pill:notification', listener);
+    return () => ipcRenderer.removeListener('pill:notification', listener);
+  },
+  onNotificationListenerStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('pill:notification-listener-status', listener);
+    return () => ipcRenderer.removeListener('pill:notification-listener-status', listener);
+  },
 });

@@ -2,14 +2,18 @@ const { app, BrowserWindow, ipcMain, screen, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const readline = require('node:readline');
 const loudness = require('loudness');
 
 const collapsedSize = { width: 480, height: 8 };
 const expandedSize = { width: 480, height: 42 };
 const appsExpandedSize = { width: 480, height: 460 };
 const musicExpandedSize = { width: 480, height: 240 };
+const notificationSize = { width: 480, height: 120 };
 const installedApps = new Map();
 const runningWindows = new Map();
+let notificationProcess;
+let appIsQuitting = false;
 
 const windowApi = `
 using System;
@@ -103,6 +107,98 @@ try {
   ${body}
 } catch {
   [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}`;
+}
+
+function createNotificationListenerScript() {
+  return `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try {
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  $null = [Windows.UI.Notifications.Management.UserNotificationListener, Windows.UI.Notifications, ContentType=WindowsRuntime]
+  $null = [Windows.UI.Notifications.UserNotification, Windows.UI.Notifications, ContentType=WindowsRuntime]
+  $null = [Windows.UI.Notifications.KnownNotificationBindings, Windows.UI.Notifications, ContentType=WindowsRuntime]
+  function Wait-WinRt($operation, [Type]$resultType) {
+    $method = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+      $_.Name -eq 'AsTask' -and $_.IsGenericMethodDefinition -and $_.GetGenericArguments().Length -eq 1 -and $_.GetParameters().Length -eq 1 -and $_.GetParameters()[0].ParameterType.GetGenericTypeDefinition().FullName -eq 'Windows.Foundation.IAsyncOperation\`1'
+    } | Select-Object -First 1
+    $task = $method.MakeGenericMethod($resultType).Invoke($null, [object[]]@($operation))
+    return $task.GetAwaiter().GetResult()
+  }
+  function Write-ListenerMessage($message) {
+    [Console]::Out.WriteLine((ConvertTo-Json -InputObject $message -Compress -Depth 4))
+    [Console]::Out.Flush()
+  }
+  function Get-NotificationKey($notification) {
+    return '{0}:{1}' -f $notification.Id, $notification.CreationTime.UtcDateTime.Ticks
+  }
+  function Convert-Notification($notification) {
+    $appName = [string]$notification.AppInfo.DisplayInfo.DisplayName
+    if (-not $appName) { $appName = [string]$notification.AppInfo.AppUserModelId }
+    if (-not $appName) { $appName = 'Windows' }
+
+    $texts = @()
+    $binding = $notification.Notification.Visual.GetBinding([Windows.UI.Notifications.KnownNotificationBindings]::ToastGeneric)
+    if ($binding) {
+      foreach ($element in @($binding.GetTextElements())) {
+        $text = [string]$element.Text
+        if ($text) { $texts += $text }
+      }
+    }
+
+    $title = if ($texts.Count -gt 0) { $texts[0] } else { $appName }
+    $message = if ($texts.Count -gt 1) { $texts[1..($texts.Count - 1)] -join ' ' } else { '' }
+    if ($title.Length -gt 240) { $title = $title.Substring(0, 240) }
+    if ($message.Length -gt 900) { $message = $message.Substring(0, 900) }
+    return @{
+      appName = $appName
+      title = $title
+      message = $message
+    }
+  }
+
+  $listener = [Windows.UI.Notifications.Management.UserNotificationListener]::Current
+  $access = $listener.GetAccessStatus().ToString()
+  $lastAccess = $access
+  Write-ListenerMessage @{ type = 'status'; access = $access }
+  while ($access -ne 'Allowed') {
+    Start-Sleep -Seconds 2
+    $access = $listener.GetAccessStatus().ToString()
+    if ($access -ne $lastAccess) {
+      Write-ListenerMessage @{ type = 'status'; access = $access }
+      $lastAccess = $access
+    }
+  }
+
+  $notificationType = [System.Collections.Generic.IReadOnlyList[Windows.UI.Notifications.UserNotification]]
+  $knownNotifications = [System.Collections.Generic.HashSet[string]]::new()
+  $notifications = Wait-WinRt ($listener.GetNotificationsAsync([Windows.UI.Notifications.NotificationKinds]::Toast)) $notificationType
+  foreach ($notification in $notifications) {
+    [void]$knownNotifications.Add((Get-NotificationKey $notification))
+  }
+
+  while ($true) {
+    Start-Sleep -Milliseconds 800
+    $notifications = Wait-WinRt ($listener.GetNotificationsAsync([Windows.UI.Notifications.NotificationKinds]::Toast)) $notificationType
+    foreach ($notification in $notifications) {
+      $key = Get-NotificationKey $notification
+      if ($knownNotifications.Add($key)) {
+        try {
+          $payload = Convert-Notification $notification
+          $payload.type = 'notification'
+          Write-ListenerMessage $payload
+        } catch {
+          [Console]::Error.WriteLine('Could not read a Windows notification: ' + $_.Exception.Message)
+        }
+      }
+    }
+  }
+} catch {
+  [Console]::Error.WriteLine($_.Exception.Message)
+  Write-ListenerMessage @{ type = 'status'; access = 'Unavailable' }
   exit 1
 }`;
 }
@@ -359,6 +455,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+  let currentSize = collapsedSize;
+  let notificationOpen = false;
 
   function keepWindowOnTop() {
     if (window.isDestroyed()) {
@@ -370,7 +468,21 @@ function createWindow() {
   }
 
   function setWindowSize(size) {
-    window.setContentSize(size.width, size.height);
+    currentSize = size;
+    const displayedSize = notificationOpen ? notificationSize : size;
+    window.setContentSize(displayedSize.width, displayedSize.height);
+    keepWindowOnTop();
+  }
+
+  function setNotificationOpen(isOpen) {
+    if (notificationOpen === isOpen) {
+      return;
+    }
+
+    notificationOpen = isOpen;
+    const displayedSize = notificationOpen ? notificationSize : currentSize;
+    window.setContentSize(displayedSize.width, displayedSize.height);
+    window.setIgnoreMouseEvents(!notificationOpen && currentSize === collapsedSize, { forward: true });
     keepWindowOnTop();
   }
 
@@ -380,8 +492,10 @@ function createWindow() {
   window.setIgnoreMouseEvents(true, { forward: true });
   ipcMain.on('pill:set-interactive', (event, interactive) => {
     if (event.sender === window.webContents && typeof interactive === 'boolean') {
-      window.setIgnoreMouseEvents(!interactive, { forward: true });
-      if (interactive) {
+      if (!notificationOpen) {
+        window.setIgnoreMouseEvents(!interactive, { forward: true });
+      }
+      if (interactive || notificationOpen) {
         keepWindowOnTop();
       }
     }
@@ -393,9 +507,21 @@ function createWindow() {
 
     const size = expanded ? expandedSize : collapsedSize;
     setWindowSize(size);
-    if (!expanded) {
+    if (!expanded && !notificationOpen) {
       window.setIgnoreMouseEvents(true, { forward: true });
     }
+  });
+  ipcMain.handle('pill:set-notification-open', (event, isOpen) => {
+    if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
+      throw new Error('Invalid notification window request');
+    }
+    setNotificationOpen(isOpen);
+  });
+  ipcMain.handle('pill:open-notification-settings', async (event) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized notification settings request');
+    }
+    await shell.openExternal('ms-settings:privacy-notifications');
   });
   ipcMain.on('pill:set-apps-open', (event, isOpen) => {
     if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
@@ -489,12 +615,95 @@ function createWindow() {
 
   window.loadFile(path.join(__dirname, 'index.html'));
   window.once('ready-to-show', () => window.show());
+  window.once('ready-to-show', () => startNotificationListener(window));
+}
+
+function startNotificationListener(window) {
+  if (process.platform !== 'win32') {
+    window.webContents.send('pill:notification-listener-status', { access: 'Unavailable' });
+    return;
+  }
+
+  const encodedScript = Buffer.from(createNotificationListenerScript(), 'utf16le').toString('base64');
+  const listener = spawn('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-WindowStyle',
+    'Hidden',
+    '-EncodedCommand',
+    encodedScript,
+  ], { windowsHide: true });
+  notificationProcess = listener;
+  let listenerAccessStatus;
+
+  const output = readline.createInterface({ input: listener.stdout });
+  output.on('line', (line) => {
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch (error) {
+      console.error('Could not parse Windows notification listener output:', error);
+      return;
+    }
+
+    if (message.type === 'status' && typeof message.access === 'string') {
+      listenerAccessStatus = message.access;
+      window.webContents.send('pill:notification-listener-status', { access: message.access });
+      return;
+    }
+    if (
+      message.type === 'notification'
+      && typeof message.appName === 'string'
+      && typeof message.title === 'string'
+      && typeof message.message === 'string'
+    ) {
+      window.webContents.send('pill:notification', {
+        appName: message.appName.slice(0, 200),
+        title: message.title.slice(0, 240),
+        message: message.message.slice(0, 900),
+      });
+    }
+  });
+
+  listener.stderr.setEncoding('utf8');
+  listener.stderr.on('data', (data) => {
+    console.error('Windows notification listener:', data.trim());
+  });
+  listener.on('error', (error) => {
+    console.error('Failed to start Windows notification listener:', error);
+    if (listenerAccessStatus !== 'Unavailable') {
+      listenerAccessStatus = 'Unavailable';
+      window.webContents.send('pill:notification-listener-status', { access: 'Unavailable' });
+    }
+  });
+  listener.on('close', (code) => {
+    if (notificationProcess === listener) {
+      notificationProcess = undefined;
+      if (!appIsQuitting && listenerAccessStatus !== 'Unavailable') {
+        listenerAccessStatus = 'Unavailable';
+        console.error(`Windows notification listener exited with code ${code}.`);
+        window.webContents.send('pill:notification-listener-status', { access: 'Unavailable' });
+      }
+    }
+  });
 }
 
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
+  if (notificationProcess) {
+    notificationProcess.kill();
+    notificationProcess = undefined;
+  }
   if (process.platform !== 'darwin') {
     app.quit();
+  }
+});
+
+app.on('before-quit', () => {
+  appIsQuitting = true;
+  if (notificationProcess) {
+    notificationProcess.kill();
+    notificationProcess = undefined;
   }
 });

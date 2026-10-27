@@ -24,6 +24,12 @@ const musicPrevious = document.querySelector('.music-previous');
 const musicPlayPause = document.querySelector('.music-play-pause');
 const musicPlayPauseIcon = document.querySelector('.music-play-pause-icon');
 const musicNext = document.querySelector('.music-next');
+const notificationToast = document.querySelector('.notification-toast');
+const notificationApp = document.querySelector('.notification-app');
+const notificationTitle = document.querySelector('.notification-title');
+const notificationMessage = document.querySelector('.notification-message');
+const notificationClose = document.querySelector('.notification-close');
+const notificationSettings = document.querySelector('.notification-settings');
 let expanded = false;
 let animating = false;
 let opening = false;
@@ -34,6 +40,10 @@ let musicRefreshTimer;
 let refreshingMusic = false;
 let controllingMusic = false;
 let currentMediaSession;
+let notificationTimer;
+let notificationQueue = [];
+let notificationOpen = false;
+let currentNotification;
 
 function updateClock() {
   const now = new Date();
@@ -57,6 +67,90 @@ function updateClock() {
 }
 
 updateClock();
+
+function showNextNotification() {
+  clearTimeout(notificationTimer);
+  const notification = notificationQueue.shift();
+  currentNotification = notification;
+  if (!notification) {
+    notificationOpen = false;
+    notificationToast.setAttribute('aria-hidden', 'true');
+    notificationToast.inert = true;
+    pill.classList.remove('notification-open');
+    window.pillApp.setNotificationOpen(false).catch((error) => {
+      console.error('Failed to resize the pill after a notification:', error);
+    });
+    window.pillApp.setInteractive(expanded);
+    if (expanded && !pill.matches(':hover')) {
+      collapsePill();
+    }
+    return;
+  }
+
+  notificationOpen = true;
+  notificationApp.textContent = notification.appName || 'Windows';
+  notificationTitle.textContent = notification.title || notification.appName || 'Notification';
+  notificationMessage.textContent = notification.message || '';
+  notificationSettings.hidden = !notification.settingsNeeded;
+  notificationToast.setAttribute('aria-hidden', 'false');
+  notificationToast.inert = false;
+  pill.classList.add('notification-open');
+  window.pillApp.setNotificationOpen(true).catch((error) => {
+    console.error('Failed to expand the pill for a notification:', error);
+  });
+  window.pillApp.setInteractive(true);
+
+  notificationTimer = notification.settingsNeeded
+    ? undefined
+    : setTimeout(showNextNotification, 7000);
+}
+
+function enqueueNotification(notification) {
+  if (notificationQueue.length >= 20) {
+    notificationQueue.shift();
+  }
+  notificationQueue.push(notification);
+  if (!notificationOpen) {
+    showNextNotification();
+  }
+}
+
+notificationClose.addEventListener('click', showNextNotification);
+notificationSettings.addEventListener('click', async () => {
+  try {
+    await window.pillApp.openNotificationSettings();
+  } catch (error) {
+    console.error('Failed to open Windows notification settings:', error);
+  }
+  clearTimeout(notificationTimer);
+  showNextNotification();
+});
+
+window.pillApp.onNotification((notification) => {
+  enqueueNotification(notification);
+});
+window.pillApp.onNotificationListenerStatus((status) => {
+  if (status.access === 'Allowed') {
+    notificationQueue = notificationQueue.filter((notification) => !notification.settingsNeeded);
+    if (currentNotification && currentNotification.settingsNeeded) {
+      showNextNotification();
+    }
+  } else if (status.access !== 'Unavailable') {
+    enqueueNotification({
+      appName: 'The Pill',
+      title: 'Notification access is needed',
+      message: 'Allow The Pill to read Windows notifications in Settings to show them here.',
+      settingsNeeded: true,
+    });
+  } else {
+    enqueueNotification({
+      appName: 'The Pill',
+      title: 'Windows notifications are unavailable',
+      message: 'The Pill could not connect to Windows notifications. Check the app installation and permissions.',
+      settingsNeeded: true,
+    });
+  }
+});
 
 function waitForPillTransition() {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -426,12 +520,18 @@ async function expandPill() {
 }
 
 pill.addEventListener('mouseenter', () => {
+  if (notificationOpen) {
+    return;
+  }
   if (!expanded) {
     window.pillApp.setInteractive(true);
   }
 });
 
 pill.addEventListener('mouseleave', () => {
+  if (notificationOpen) {
+    return;
+  }
   if (expanded) {
     if (!opening) {
       collapsePill();

@@ -18,6 +18,13 @@
     "directories": {
       "buildResources": "appx-build"
     },
+    "nsis": {
+      "include": "installer.nsh",
+      "runAfterFinish": true
+    },
+    "win": {
+      "icon": "appx-build/the-pill-app-icon.ico"
+    },
     "appx": {
       "applicationId": "ThePill",
       "customManifestPath": "AppxManifest.xml",

@@ -1,4 +1,14 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, screen, shell } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  globalShortcut,
+  ipcMain,
+  Menu,
+  nativeImage,
+  screen,
+  shell,
+  Tray,
+} = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -13,6 +23,7 @@ const notificationSize = { width: 480, height: 120 };
 const installedApps = new Map();
 const runningWindows = new Map();
 let notificationProcess;
+let tray;
 let appIsQuitting = false;
 let runningAppSelectionActive = false;
 let windowActivationProcess;
@@ -626,6 +637,7 @@ function createWindow() {
   const window = new BrowserWindow({
     width: collapsedSize.width,
     height: collapsedSize.height,
+    icon: path.join(__dirname, 'the-pill-app-icon.png'),
     useContentSize: true,
     x: Math.round(bounds.x + (bounds.width - collapsedSize.width) / 2),
     y: bounds.y,
@@ -861,6 +873,7 @@ function createWindow() {
   })) {
     console.error('Could not register the Alt+Shift+Q shortcut.');
   }
+  return window;
 }
 
 function startNotificationListener(window) {
@@ -939,7 +952,37 @@ app.whenReady().then(() => {
       console.error('Could not start app activation worker:', error);
     });
   }
-  createWindow();
+  const window = createWindow();
+  const trayIcon = nativeImage.createFromPath(path.join(__dirname, 'the-pill-app-icon.png'));
+  if (trayIcon.isEmpty()) {
+    throw new Error('Could not load the system tray icon.');
+  }
+  tray = new Tray(trayIcon.resize({ width: 16, height: 16 }));
+  tray.setToolTip('The Pill');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {
+      label: 'Show The Pill',
+      click: () => {
+        if (!window.isDestroyed()) {
+          window.show();
+          window.focus();
+        }
+      },
+    },
+    { type: 'separator' },
+    { label: 'Quit The Pill', click: () => app.quit() },
+  ]));
+  tray.on('click', () => {
+    if (window.isDestroyed()) {
+      return;
+    }
+    if (window.isVisible()) {
+      window.hide();
+    } else {
+      window.show();
+      window.focus();
+    }
+  });
 });
 
 app.on('window-all-closed', () => {
@@ -954,6 +997,10 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   appIsQuitting = true;
+  if (tray) {
+    tray.destroy();
+    tray = undefined;
+  }
   globalShortcut.unregisterAll();
   if (windowActivationProcess) {
     windowActivationProcess.kill();

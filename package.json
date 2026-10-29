@@ -1,14 +1,34 @@
 {
   "name": "the-pill",
   "version": "1.0.0",
+  "description": "A desktop pill-shaped launcher for Windows.",
+  "author": "c846",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.thepill.desktop",
+    "productName": "The Pill",
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "include": "installer.nsh"
+    }
   },
   "dependencies": {
     "loudness": "^0.4.2"
   },
   "devDependencies": {
-    "electron": "^45.0.0"
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0"
   }
 }

@@ -58,6 +58,10 @@ let controllingMusic = false;
 let currentMediaSession;
 let notificationTimer;
 let notificationClosingTimer;
+let batteryPowerSource;
+let batteryRefreshRequested = false;
+let batteryChargingRetryTimer;
+let batteryChargingRetriesRemaining = 0;
 let notificationQueue = [];
 let notificationOpen = false;
 let currentNotification;
@@ -142,29 +146,64 @@ updateClock();
 
 async function refreshBatteryPercentage() {
   if (refreshingBattery) {
+    batteryRefreshRequested = true;
     return;
   }
 
   refreshingBattery = true;
   try {
-    const percentage = await window.pillApp.getBatteryPercentage();
-    if (percentage === null) {
+    const battery = await window.pillApp.getBatteryStatus();
+    if (battery === null) {
       batteryPercentage.hidden = true;
+      batteryPercentage.classList.remove('is-charging');
       return;
     }
 
+    const { percentage, isCharging } = battery;
     batteryPercentage.textContent = String(percentage);
     batteryPercentage.setAttribute('aria-label', `Battery charge ${percentage} percent`);
     batteryPercentage.classList.toggle('is-low', percentage <= 20 && percentage > 10);
     batteryPercentage.classList.toggle('is-critical', percentage <= 10);
+    const isChargingOnAc = isCharging && batteryPowerSource !== false;
+    batteryPercentage.classList.toggle('is-charging', isChargingOnAc);
     batteryPercentage.hidden = false;
+    if (isChargingOnAc) {
+      clearTimeout(batteryChargingRetryTimer);
+      batteryChargingRetryTimer = undefined;
+      batteryChargingRetriesRemaining = 0;
+    } else if (batteryPowerSource === true && batteryChargingRetriesRemaining > 0) {
+      clearTimeout(batteryChargingRetryTimer);
+      batteryChargingRetriesRemaining -= 1;
+      batteryChargingRetryTimer = setTimeout(refreshBatteryPercentage, 2000);
+    }
   } catch (error) {
     batteryPercentage.hidden = true;
+    batteryPercentage.classList.remove('is-charging');
+    clearTimeout(batteryChargingRetryTimer);
+    batteryChargingRetryTimer = undefined;
+    batteryChargingRetriesRemaining = 0;
     console.error('Failed to read battery percentage:', error);
   } finally {
     refreshingBattery = false;
+    if (batteryRefreshRequested) {
+      batteryRefreshRequested = false;
+      refreshBatteryPercentage();
+    }
   }
 }
+
+window.pillApp.onBatteryPowerSource((isOnAc) => {
+  batteryPowerSource = isOnAc;
+  clearTimeout(batteryChargingRetryTimer);
+  batteryChargingRetryTimer = undefined;
+  if (isOnAc) {
+    batteryChargingRetriesRemaining = 5;
+    refreshBatteryPercentage();
+  } else {
+    batteryChargingRetriesRemaining = 0;
+    batteryPercentage.classList.remove('is-charging');
+  }
+});
 
 refreshBatteryPercentage();
 setInterval(refreshBatteryPercentage, 60000);

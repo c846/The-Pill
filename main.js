@@ -3,6 +3,7 @@ const {
   BrowserWindow,
   globalShortcut,
   ipcMain,
+  powerMonitor,
   screen,
   shell,
 } = require('electron');
@@ -11,6 +12,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const readline = require('node:readline');
 const loudness = require('loudness');
+
+app.setName('The Pill');
 
 const collapsedSize = { width: 480, height: 8 };
 const expandedSize = { width: 480, height: 42 };
@@ -688,28 +691,43 @@ ConvertTo-Json -InputObject @(Get-StartApps | Select-Object Name, AppID) -Compre
   });
 }
 
-async function getBatteryPercentage() {
+async function getBatteryStatus() {
   if (process.platform !== 'win32') {
     throw new Error('Battery status is only supported on Windows.');
   }
 
   const output = await runPowerShell(`
 $ErrorActionPreference = 'Stop'
-$battery = Get-CimInstance -ClassName Win32_Battery | Select-Object -First 1 -ExpandProperty EstimatedChargeRemaining
+$battery = Get-CimInstance -ClassName Win32_Battery | Select-Object -First 1 EstimatedChargeRemaining
 if ($null -eq $battery) {
   'null'
 } else {
-  ConvertTo-Json -InputObject ([int]$battery) -Compress
+  $status = Get-CimInstance -Namespace root/WMI -ClassName BatteryStatus | Where-Object Active | Select-Object -First 1
+  if ($null -eq $status) {
+    throw 'Windows did not report battery charging status.'
+  }
+  ConvertTo-Json -InputObject ([pscustomobject]@{
+    Percentage = [int]$battery.EstimatedChargeRemaining
+    IsCharging = [bool]$status.Charging -and [bool]$status.PowerOnline
+  }) -Compress
 }
 `);
-  const percentage = JSON.parse(output);
-  if (percentage === null) {
+  const battery = JSON.parse(output);
+  if (battery === null) {
     return null;
   }
-  if (!Number.isInteger(percentage) || percentage < 0 || percentage > 100) {
-    throw new Error('Windows returned an invalid battery percentage.');
+  if (
+    !Number.isInteger(battery.Percentage)
+    || battery.Percentage < 0
+    || battery.Percentage > 100
+    || typeof battery.IsCharging !== 'boolean'
+  ) {
+    throw new Error('Windows returned invalid battery status.');
   }
-  return percentage;
+  return {
+    percentage: battery.Percentage,
+    isCharging: battery.IsCharging,
+  };
 }
 
 function createWindow() {
@@ -741,6 +759,19 @@ function createWindow() {
   });
   let currentSize = collapsedSize;
   let notificationOpen = false;
+  const sendBatteryPowerSource = (isOnAc) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('pill:battery-power-source', isOnAc);
+    }
+  };
+  const onAc = () => sendBatteryPowerSource(true);
+  const onBattery = () => sendBatteryPowerSource(false);
+  powerMonitor.on('on-ac', onAc);
+  powerMonitor.on('on-battery', onBattery);
+  window.once('closed', () => {
+    powerMonitor.removeListener('on-ac', onAc);
+    powerMonitor.removeListener('on-battery', onBattery);
+  });
 
   function keepWindowOnTop() {
     if (window.isDestroyed()) {
@@ -932,12 +963,12 @@ function createWindow() {
 
     return loudness.getVolume();
   });
-  ipcMain.handle('pill:get-battery-percentage', (event) => {
+  ipcMain.handle('pill:get-battery-status', (event) => {
     if (event.sender !== window.webContents) {
       throw new Error('Unauthorized battery status request');
     }
 
-    return getBatteryPercentage();
+    return getBatteryStatus();
   });
   ipcMain.handle('pill:set-volume', (event, volume) => {
     if (

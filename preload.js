@@ -9,7 +9,12 @@ contextBridge.exposeInMainWorld('pillApp', {
   setMusicOpen: (isOpen) => ipcRenderer.send('pill:set-music-open', isOpen),
   getVolume: () => ipcRenderer.invoke('pill:get-volume'),
   setVolume: (volume) => ipcRenderer.invoke('pill:set-volume', volume),
-  getBatteryPercentage: () => ipcRenderer.invoke('pill:get-battery-percentage'),
+  getBatteryStatus: () => ipcRenderer.invoke('pill:get-battery-status'),
+  onBatteryPowerSource: (callback) => {
+    const listener = (_event, isOnAc) => callback(isOnAc);
+    ipcRenderer.on('pill:battery-power-source', listener);
+    return () => ipcRenderer.removeListener('pill:battery-power-source', listener);
+  },
   getApps: () => ipcRenderer.invoke('pill:get-apps'),
   launchApp: (id) => ipcRenderer.invoke('pill:launch-app', id),
   getRunningWindows: () => ipcRenderer.invoke('pill:get-running-windows'),

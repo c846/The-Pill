@@ -363,6 +363,24 @@ button.app-result:hover:not(:disabled) {
   color: #d00000;
 }
 
+.battery-percentage.is-charging {
+  display: inline-block;
+  animation: battery-charging-glow 3.0s ease-in-out infinite;
+}
+
+@keyframes battery-charging-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 0 rgba(92, 151, 255, 0));
+  }
+
+  50% {
+    filter:
+      drop-shadow(0 0 4px rgba(255, 255, 255, 0.95))
+      drop-shadow(0 0 9px rgba(250, 252, 255, 0.72));
+  }
+}
+
 .pill[aria-expanded="true"] .pill-actions {
   position: absolute;
   top: 20px;
@@ -772,6 +790,19 @@ button.app-result:hover:not(:disabled) {
   width: 20px;
   height: 20px;
   object-fit: contain;
+  transition:
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    filter 180ms ease;
+}
+
+.apps-toggle:hover:not(:disabled) img,
+.volume-toggle:hover:not(:disabled) img,
+.music-toggle:hover:not(:disabled) img,
+.apps-toggle:focus-visible:not(:disabled) img,
+.volume-toggle:focus-visible:not(:disabled) img,
+.music-toggle:focus-visible:not(:disabled) img {
+  filter: drop-shadow(0 1px 2px rgba(24, 39, 68, 0.22));
+  transform: translateY(-1px) scale(1.12);
 }
 
 .apps-toggle:hover,
@@ -1155,15 +1186,11 @@ button.app-result:hover:not(:disabled) {
   user-select: text;
   -webkit-user-select: text;
   opacity: 0;
-  transform: translateY(-8px);
-  transition:
-    opacity 360ms ease,
-    transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: opacity 360ms ease;
 }
 
 .pill.apps-content-ready .apps-search {
   opacity: 1;
-  transform: translateY(0);
 }
 
 .apps-list {
@@ -1226,10 +1253,8 @@ button.app-result:hover:not(:disabled) {
     0 8px 24px rgba(24, 39, 68, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.82);
   opacity: 0;
-  transform: translateY(8px);
   transition:
     opacity 360ms ease,
-    transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
     flex-basis 180ms ease,
     width 180ms ease,
     max-width 180ms ease,
@@ -1239,7 +1264,6 @@ button.app-result:hover:not(:disabled) {
 
 .pill.apps-content-ready .running-apps {
   opacity: 1;
-  transform: translateY(0);
 }
 
 .running-apps-header {
@@ -1452,6 +1476,22 @@ button.app-result:hover:not(:disabled) {
 
   .volume-slider::-moz-range-thumb {
     transition: none;
+  }
+
+  .apps-toggle img,
+  .volume-toggle img,
+  .music-toggle img {
+    transition: none;
+  }
+
+  .apps-toggle:hover:not(:disabled) img,
+  .volume-toggle:hover:not(:disabled) img,
+  .music-toggle:hover:not(:disabled) img,
+  .apps-toggle:focus-visible:not(:disabled) img,
+  .volume-toggle:focus-visible:not(:disabled) img,
+  .music-toggle:focus-visible:not(:disabled) img {
+    filter: none;
+    transform: none;
   }
 
   .music-actions .music-play-pause img.is-changing {

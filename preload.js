@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('pillApp', {
   setInteractive: (interactive) => ipcRenderer.send('pill:set-interactive', interactive),
   setExpanded: (expanded) => ipcRenderer.invoke('pill:set-expanded', expanded),
+  setSettingsOpen: (isOpen) => ipcRenderer.invoke('pill:set-settings-open', isOpen),
   focusWindow: () => ipcRenderer.invoke('pill:focus-window'),
   setAppsOpen: (isOpen) => ipcRenderer.send('pill:set-apps-open', isOpen),
   setMusicOpen: (isOpen) => ipcRenderer.send('pill:set-music-open', isOpen),

@@ -2,6 +2,7 @@ const pill = document.querySelector('.pill');
 const pillClock = document.querySelector('.pill-clock');
 const pillDate = document.querySelector('.pill-date');
 const batteryPercentage = document.querySelector('.battery-percentage');
+const pillSettingsMenu = document.querySelector('.pill-settings-menu');
 const appsToggle = document.querySelector('.apps-toggle');
 const appsControls = document.querySelector('.apps-controls');
 const appsSearch = document.querySelector('.apps-search');
@@ -35,6 +36,7 @@ const notificationMessage = document.querySelector('.notification-message');
 const notificationClose = document.querySelector('.notification-close');
 const notificationSettings = document.querySelector('.notification-settings');
 let expanded = false;
+let settingsOpen = false;
 let animating = false;
 let opening = false;
 let installedApps = [];
@@ -59,6 +61,61 @@ let notificationClosingTimer;
 let notificationQueue = [];
 let notificationOpen = false;
 let currentNotification;
+
+const pillOptionTargets = new Map([
+  ['apps', appsToggle],
+  ['volume', volumeToggle],
+  ['music', musicToggle],
+  ['date', pillDate],
+  ['time', pillClock],
+  ['battery', batteryPercentage],
+]);
+const savedPillOptions = loadPillOptions();
+const pillOptions = Object.fromEntries(
+  [...pillOptionTargets.keys()].map((key) => [key, savedPillOptions[key] !== false]),
+);
+
+function loadPillOptions() {
+  try {
+    const savedOptions = window.localStorage.getItem('pill-options');
+    if (!savedOptions) {
+      return {};
+    }
+
+    const options = JSON.parse(savedOptions);
+    if (options && typeof options === 'object' && !Array.isArray(options)) {
+      return options;
+    }
+    console.error('Saved pill options have an invalid format.');
+  } catch (error) {
+    console.error('Failed to read saved pill options:', error);
+  }
+
+  return {};
+}
+
+function applyPillOption(key) {
+  const enabled = pillOptions[key];
+  const target = pillOptionTargets.get(key);
+  const optionButton = pillSettingsMenu.querySelector(`[data-pill-option="${key}"]`);
+  target.classList.toggle('pill-option-disabled', !enabled);
+  target.setAttribute('aria-hidden', String(!enabled));
+  target.inert = !enabled;
+  optionButton.setAttribute('aria-pressed', String(enabled));
+  optionButton.classList.toggle('is-disabled', !enabled);
+}
+
+function savePillOptions() {
+  try {
+    window.localStorage.setItem('pill-options', JSON.stringify(pillOptions));
+  } catch (error) {
+    console.error('Failed to save pill options:', error);
+  }
+}
+
+for (const key of pillOptionTargets.keys()) {
+  applyPillOption(key);
+}
 
 function updateClock() {
   const now = new Date();
@@ -234,7 +291,7 @@ function waitForPillTransition() {
   }
 
   return new Promise((resolve) => {
-    const fallback = setTimeout(finish, 400);
+    const fallback = setTimeout(finish, 500);
 
     function finish(event) {
       if (event && (event.target !== pill || event.propertyName !== 'height')) {
@@ -827,6 +884,11 @@ async function collapsePill() {
     return;
   }
 
+  if (settingsOpen) {
+    await closePillSettings(true);
+    return;
+  }
+
   animating = true;
   expanded = false;
   pill.setAttribute('aria-expanded', 'false');
@@ -851,6 +913,126 @@ async function collapsePill() {
     console.error('Failed to collapse pill window:', error);
   } finally {
     animating = false;
+  }
+}
+
+async function closePillSettings(collapse = false) {
+  if (!settingsOpen || animating || opening) {
+    return;
+  }
+
+  animating = true;
+  settingsOpen = false;
+  if (collapse) {
+    expanded = false;
+    pill.setAttribute('aria-expanded', 'false');
+    pill.classList.add('settings-collapse');
+  } else {
+    pill.classList.add('settings-returning');
+  }
+  pill.classList.add('settings-closing');
+  pillSettingsMenu.setAttribute('aria-hidden', 'true');
+  pillSettingsMenu.inert = true;
+  await waitForPillTransition();
+
+  try {
+    if (collapse) {
+      await window.pillApp.setExpanded(false);
+    } else {
+      await window.pillApp.setSettingsOpen(false);
+    }
+  } catch (error) {
+    console.error('Failed to close the pill settings menu:', error);
+    settingsOpen = true;
+    if (collapse) {
+      expanded = true;
+      pill.setAttribute('aria-expanded', 'true');
+    }
+    pill.classList.remove('settings-closing', 'settings-collapse', 'settings-returning');
+    pillSettingsMenu.setAttribute('aria-hidden', 'false');
+    pillSettingsMenu.inert = false;
+    animating = false;
+    return;
+  }
+
+  pill.classList.remove('settings-open', 'settings-closing', 'settings-collapse', 'settings-returning');
+  animating = false;
+}
+
+async function openPillSettings() {
+  if (settingsOpen) {
+    await closePillSettings();
+    return;
+  }
+
+  if (notificationOpen || keyboardSelectionActive || animating || opening) {
+    return;
+  }
+
+  keyboardPinned = false;
+  const switchingFromApps = appsControls.classList.contains('is-open');
+  if (switchingFromApps) {
+    setAppsControlsOpen(false, false);
+    finishAppsClosing();
+  }
+  if (pill.classList.contains('music-open')) {
+    setMusicControlsOpen(false, false);
+  }
+  finishVolumeAdjustment();
+
+  opening = true;
+  window.pillApp.setInteractive(true);
+  expanded = true;
+  settingsOpen = true;
+  pill.setAttribute('aria-expanded', 'true');
+  pill.classList.add('settings-open', 'settings-switching-out', 'settings-entering');
+  pillSettingsMenu.setAttribute('aria-hidden', 'true');
+  pillSettingsMenu.inert = true;
+  if (!switchingFromApps) {
+    try {
+      await window.pillApp.setSettingsOpen(true);
+    } catch (error) {
+      opening = false;
+      settingsOpen = false;
+      expanded = false;
+      pill.setAttribute('aria-expanded', 'false');
+      pill.classList.remove('settings-open', 'settings-switching-out', 'settings-entering');
+      console.error('Failed to open the pill elements menu:', error);
+      return;
+    }
+  }
+
+  await waitForPillTransition();
+  if (switchingFromApps) {
+    try {
+      await window.pillApp.setSettingsOpen(true);
+    } catch (error) {
+      opening = false;
+      settingsOpen = false;
+      expanded = false;
+      pill.setAttribute('aria-expanded', 'false');
+      pill.classList.remove('settings-open', 'settings-switching-out', 'settings-entering');
+      pillSettingsMenu.inert = true;
+      try {
+        await window.pillApp.setExpanded(false);
+      } catch (resizeError) {
+        console.error('Failed to restore the collapsed pill after opening settings failed:', resizeError);
+      }
+      console.error('Failed to open the pill elements menu:', error);
+      return;
+    }
+  }
+
+  pill.classList.remove('settings-switching-out');
+  pillSettingsMenu.setAttribute('aria-hidden', 'false');
+  pillSettingsMenu.inert = false;
+  requestAnimationFrame(() => {
+    pill.classList.remove('settings-entering');
+  });
+  opening = false;
+  window.pillApp.setInteractive(true);
+  if (!pill.matches(':hover')) {
+    collapsePill();
   }
 }
 
@@ -907,6 +1089,11 @@ pill.addEventListener('mouseleave', () => {
   }
 });
 
+pill.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+  openPillSettings();
+});
+
 pill.addEventListener('click', (event) => {
   if (event.target !== pill) {
     return;
@@ -917,6 +1104,39 @@ pill.addEventListener('click', (event) => {
     collapsePill();
   } else {
     expandPill();
+  }
+});
+
+pillSettingsMenu.addEventListener('click', (event) => {
+  const optionButton = event.target.closest('[data-pill-option]');
+  if (!optionButton) {
+    return;
+  }
+
+  const key = optionButton.dataset.pillOption;
+  const enabled = !pillOptions[key];
+  pillOptions[key] = enabled;
+  applyPillOption(key);
+  savePillOptions();
+
+  if (enabled) {
+    return;
+  }
+
+  if (key === 'apps' && appsControls.classList.contains('is-open')) {
+    setAppsControlsOpen(false, false);
+    finishAppsClosing();
+  } else if (key === 'music' && pill.classList.contains('music-open')) {
+    setMusicControlsOpen(false, false);
+  } else if (key === 'volume' && pill.classList.contains('volume-adjusting')) {
+    finishVolumeAdjustment();
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && settingsOpen) {
+    event.preventDefault();
+    collapsePill();
   }
 });
 

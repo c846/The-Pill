@@ -14,6 +14,7 @@ const loudness = require('loudness');
 
 const collapsedSize = { width: 480, height: 8 };
 const expandedSize = { width: 480, height: 42 };
+const settingsExpandedSize = { width: 480, height: 330 };
 const appsExpandedSize = { width: 480, height: 460 };
 const musicExpandedSize = { width: 480, height: 240 };
 const notificationSize = { width: 480, height: 120 };
@@ -753,7 +754,13 @@ function createWindow() {
   function setWindowSize(size) {
     currentSize = size;
     const displayedSize = notificationOpen ? notificationSize : size;
-    window.setContentSize(displayedSize.width, displayedSize.height);
+    const { bounds } = screen.getDisplayMatching(window.getBounds());
+    window.setBounds({
+      x: Math.round(bounds.x + (bounds.width - displayedSize.width) / 2),
+      y: bounds.y,
+      width: displayedSize.width,
+      height: displayedSize.height,
+    });
     keepWindowOnTop();
   }
 
@@ -793,6 +800,13 @@ function createWindow() {
     if (!expanded && !notificationOpen) {
       window.setIgnoreMouseEvents(true, { forward: true });
     }
+  });
+  ipcMain.handle('pill:set-settings-open', (event, isOpen) => {
+    if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
+      throw new Error('Unauthorized pill settings menu request');
+    }
+
+    setWindowSize(isOpen ? settingsExpandedSize : expandedSize);
   });
   ipcMain.handle('pill:focus-window', (event) => {
     if (event.sender !== window.webContents) {

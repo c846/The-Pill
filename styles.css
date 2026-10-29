@@ -297,6 +297,10 @@ button.app-result:hover:not(:disabled) {
   outline-offset: 2px;
 }
 
+.pill.apps-closing {
+  padding: 4px 18px;
+}
+
 .pill.apps-closing,
 .pill.music-closing {
   overflow: hidden;
@@ -331,21 +335,29 @@ button.app-result:hover:not(:disabled) {
     visibility 0s;
 }
 
+.battery-percentage.is-low {
+  color: #b58900;
+}
+
+.battery-percentage.is-critical {
+  color: #d00000;
+}
+
 .pill[aria-expanded="true"] .pill-actions {
   position: absolute;
-  top: 50%;
+  top: 20px;
   left: 6px;
   align-self: auto;
   transform: translateY(-50%);
 }
 
 .pill[aria-expanded="true"] .pill-datetime {
-  top: 50%;
+  top: 20px;
 }
 
 .pill.apps-open .pill-actions,
 .pill.apps-closing .pill-actions {
-  top: 19px;
+  top: 16px;
   transform: translateY(-50%);
   transition:
     opacity 180ms ease,
@@ -363,17 +375,17 @@ button.app-result:hover:not(:disabled) {
 }
 
 .pill.music-open .pill-actions {
-  top: 20px;
+  top: 16px;
   transform: translateY(-50%);
 }
 
 .pill.apps-open .pill-datetime,
 .pill.apps-closing .pill-datetime {
-  top: 20px;
+  top: 16px;
 }
 
 .pill.music-open .pill-datetime {
-  top: 20px;
+  top: 16px;
 }
 
 .pill.music-closing .pill-content {
@@ -532,7 +544,6 @@ button.app-result:hover:not(:disabled) {
   gap: 0;
 }
 
-.pill.apps-open .pill-content,
 .pill.apps-closing .pill-content,
 .pill.music-open .pill-content {
   gap: 8px;

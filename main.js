@@ -3,11 +3,8 @@ const {
   BrowserWindow,
   globalShortcut,
   ipcMain,
-  Menu,
-  nativeImage,
   screen,
   shell,
-  Tray,
 } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
@@ -23,7 +20,6 @@ const notificationSize = { width: 480, height: 120 };
 const installedApps = new Map();
 const runningWindows = new Map();
 let notificationProcess;
-let tray;
 let appIsQuitting = false;
 let runningAppSelectionActive = false;
 let windowActivationProcess;
@@ -503,6 +499,20 @@ async function getRunningWindows() {
     { processId: process.pid },
     `
   $windows = [System.Collections.Generic.List[object]]::new()
+  $excludedProcessNames = @(
+    'LockApp',
+    'SearchApp',
+    'SearchHost',
+    'ShellExperienceHost',
+    'StartMenuExperienceHost',
+    'TextInputHost',
+    'WidgetService',
+    'Widgets'
+  )
+  $processNames = @{}
+  foreach ($process in Get-Process) {
+    $processNames[[uint32]$process.Id] = $process.ProcessName
+  }
   $foreground = [PillWindowApi]::GetForegroundWindow()
   $callback = [PillWindowApi+EnumWindowsProc] {
     param($hWnd, $lParam)
@@ -512,8 +522,11 @@ async function getRunningWindows() {
     [uint32]$ownerProcessId = 0
     [void][PillWindowApi]::GetWindowThreadProcessId($hWnd, [ref]$ownerProcessId)
     if ($ownerProcessId -eq $request.processId) { return $true }
+    $processName = $processNames[$ownerProcessId]
+    if ($processName -in $excludedProcessNames) { return $true }
     $title = [System.Text.StringBuilder]::new($length + 1)
     [void][PillWindowApi]::GetWindowText($hWnd, $title, $title.Capacity)
+    if ($title.ToString() -eq 'Program Manager') { return $true }
     $handle = $hWnd.ToInt64().ToString('X')
     [void]$windows.Add([pscustomobject]@{
       id = $handle
@@ -621,15 +634,81 @@ async function getInstalledApps() {
     path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
     path.join(process.env.ProgramData || 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
   ];
-  const shortcuts = (await Promise.all(directories.map(findStartMenuShortcuts))).flat();
-  shortcuts.sort((left, right) => left.name.localeCompare(right.name));
+  const [shortcutLists, startAppsOutput] = await Promise.all([
+    Promise.all(directories.map(findStartMenuShortcuts)),
+    runPowerShell(`
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+ConvertTo-Json -InputObject @(Get-StartApps | Select-Object Name, AppID) -Compress
+`),
+  ]);
+  const shortcuts = shortcutLists.flat();
+  const startApps = JSON.parse(startAppsOutput);
+  if (!Array.isArray(startApps)) {
+    throw new Error('Windows returned an invalid list of Start Menu apps.');
+  }
+  const packagedApps = startApps
+    .filter((startApp) => (
+      startApp
+      && typeof startApp === 'object'
+      && typeof startApp.Name === 'string'
+      && startApp.Name.trim()
+      && typeof startApp.AppID === 'string'
+      && startApp.AppID.includes('!')
+    ))
+    .map((startApp) => ({
+      name: startApp.Name.trim(),
+      appId: startApp.AppID,
+    }));
+  const uniqueApps = new Map();
+  for (const appEntry of [
+    ...shortcuts.map((shortcut) => ({
+      name: shortcut.name,
+      launch: { type: 'shortcut', target: shortcut.path },
+    })),
+    ...packagedApps.map((packagedApp) => ({
+      name: packagedApp.name,
+      launch: { type: 'appId', target: packagedApp.appId },
+    })),
+  ]) {
+    const key = appEntry.name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+    if (!uniqueApps.has(key)) {
+      uniqueApps.set(key, appEntry);
+    }
+  }
+  const deduplicatedApps = [...uniqueApps.values()];
+  deduplicatedApps.sort((left, right) => left.name.localeCompare(right.name));
 
   installedApps.clear();
-  return shortcuts.map((shortcut, index) => {
+  return deduplicatedApps.map((appEntry, index) => {
     const id = String(index);
-    installedApps.set(id, shortcut.path);
-    return { id, name: shortcut.name };
+    installedApps.set(id, appEntry.launch);
+    return { id, name: appEntry.name };
   });
+}
+
+async function getBatteryPercentage() {
+  if (process.platform !== 'win32') {
+    throw new Error('Battery status is only supported on Windows.');
+  }
+
+  const output = await runPowerShell(`
+$ErrorActionPreference = 'Stop'
+$battery = Get-CimInstance -ClassName Win32_Battery | Select-Object -First 1 -ExpandProperty EstimatedChargeRemaining
+if ($null -eq $battery) {
+  'null'
+} else {
+  ConvertTo-Json -InputObject ([int]$battery) -Compress
+}
+`);
+  const percentage = JSON.parse(output);
+  if (percentage === null) {
+    return null;
+  }
+  if (!Number.isInteger(percentage) || percentage < 0 || percentage > 100) {
+    throw new Error('Windows returned an invalid battery percentage.');
+  }
+  return percentage;
 }
 
 function createWindow() {
@@ -637,7 +716,6 @@ function createWindow() {
   const window = new BrowserWindow({
     width: collapsedSize.width,
     height: collapsedSize.height,
-    icon: path.join(__dirname, 'the-pill-app-icon.png'),
     useContentSize: true,
     x: Math.round(bounds.x + (bounds.width - collapsedSize.width) / 2),
     y: bounds.y,
@@ -779,15 +857,28 @@ function createWindow() {
       throw new Error('Invalid app launch request');
     }
 
-    const shortcutPath = installedApps.get(id);
-    if (!shortcutPath) {
+    const launch = installedApps.get(id);
+    if (!launch) {
       throw new Error('The selected app is not available.');
     }
 
-    const error = await shell.openPath(shortcutPath);
-    if (error) {
-      throw new Error(`Could not launch the selected app: ${error}`);
+    if (launch.type === 'shortcut') {
+      const error = await shell.openPath(launch.target);
+      if (error) {
+        throw new Error(`Could not launch the selected app: ${error}`);
+      }
+      return;
     }
+
+    await runPowerShell(createWindowScript(
+      { appId: launch.target },
+      `
+  if ([string]$request.appId -notmatch '^[^\\\\/:*?"<>|]+![^\\\\/:*?"<>|]+$') {
+    throw 'The selected app ID is invalid.'
+  }
+  Start-Process -FilePath 'explorer.exe' -ArgumentList ('shell:AppsFolder\\' + [string]$request.appId)
+`,
+    ));
   });
   ipcMain.handle('pill:get-running-windows', async (event) => {
     if (event.sender !== window.webContents) {
@@ -826,6 +917,13 @@ function createWindow() {
     }
 
     return loudness.getVolume();
+  });
+  ipcMain.handle('pill:get-battery-percentage', (event) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized battery status request');
+    }
+
+    return getBatteryPercentage();
   });
   ipcMain.handle('pill:set-volume', (event, volume) => {
     if (
@@ -953,36 +1051,6 @@ app.whenReady().then(() => {
     });
   }
   const window = createWindow();
-  const trayIcon = nativeImage.createFromPath(path.join(__dirname, 'the-pill-app-icon.png'));
-  if (trayIcon.isEmpty()) {
-    throw new Error('Could not load the system tray icon.');
-  }
-  tray = new Tray(trayIcon.resize({ width: 16, height: 16 }));
-  tray.setToolTip('The Pill');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    {
-      label: 'Show The Pill',
-      click: () => {
-        if (!window.isDestroyed()) {
-          window.show();
-          window.focus();
-        }
-      },
-    },
-    { type: 'separator' },
-    { label: 'Quit The Pill', click: () => app.quit() },
-  ]));
-  tray.on('click', () => {
-    if (window.isDestroyed()) {
-      return;
-    }
-    if (window.isVisible()) {
-      window.hide();
-    } else {
-      window.show();
-      window.focus();
-    }
-  });
 });
 
 app.on('window-all-closed', () => {
@@ -997,10 +1065,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   appIsQuitting = true;
-  if (tray) {
-    tray.destroy();
-    tray = undefined;
-  }
   globalShortcut.unregisterAll();
   if (windowActivationProcess) {
     windowActivationProcess.kill();

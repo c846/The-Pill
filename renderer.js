@@ -1,6 +1,7 @@
 const pill = document.querySelector('.pill');
 const pillClock = document.querySelector('.pill-clock');
 const pillDate = document.querySelector('.pill-date');
+const batteryPercentage = document.querySelector('.battery-percentage');
 const appsToggle = document.querySelector('.apps-toggle');
 const appsControls = document.querySelector('.apps-controls');
 const appsSearch = document.querySelector('.apps-search');
@@ -48,6 +49,7 @@ let keyboardSelectionActive = false;
 let keyboardPinned = false;
 let runningRefreshTimer;
 let refreshingRunningApps = false;
+let refreshingBattery = false;
 let musicRefreshTimer;
 let refreshingMusic = false;
 let controllingMusic = false;
@@ -80,6 +82,35 @@ function updateClock() {
 }
 
 updateClock();
+
+async function refreshBatteryPercentage() {
+  if (refreshingBattery) {
+    return;
+  }
+
+  refreshingBattery = true;
+  try {
+    const percentage = await window.pillApp.getBatteryPercentage();
+    if (percentage === null) {
+      batteryPercentage.hidden = true;
+      return;
+    }
+
+    batteryPercentage.textContent = String(percentage);
+    batteryPercentage.setAttribute('aria-label', `Battery charge ${percentage} percent`);
+    batteryPercentage.classList.toggle('is-low', percentage <= 20 && percentage > 10);
+    batteryPercentage.classList.toggle('is-critical', percentage <= 10);
+    batteryPercentage.hidden = false;
+  } catch (error) {
+    batteryPercentage.hidden = true;
+    console.error('Failed to read battery percentage:', error);
+  } finally {
+    refreshingBattery = false;
+  }
+}
+
+refreshBatteryPercentage();
+setInterval(refreshBatteryPercentage, 60000);
 
 function showNextNotification() {
   clearTimeout(notificationTimer);
@@ -554,6 +585,11 @@ async function openAppsMenuFromShortcut() {
     expanded = true;
     pill.setAttribute('aria-expanded', 'true');
   }
+  try {
+    await window.pillApp.focusWindow();
+  } catch (error) {
+    console.error('Failed to focus the pill for the apps menu:', error);
+  }
   window.pillApp.setInteractive(true);
   if (pill.classList.contains('music-open')) {
     setMusicControlsOpen(false, false);
@@ -562,6 +598,7 @@ async function openAppsMenuFromShortcut() {
   setAppsControlsOpen(true);
   appsStatus.textContent = 'Loading apps...';
   appsSearch.value = '';
+  appsSearch.focus();
   try {
     installedApps = await window.pillApp.getApps();
     if (appsControls.classList.contains('is-open')) {

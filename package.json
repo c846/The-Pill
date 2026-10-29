@@ -3,34 +3,12 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "dist": "electron-builder --win nsis",
-    "dist:msix": "electron-builder --win appx"
+    "start": "electron ."
   },
   "dependencies": {
     "loudness": "^0.4.2"
   },
   "devDependencies": {
-    "electron": "^45.0.0",
-    "electron-builder": "^26.18.0"
-  },
-  "build": {
-    "directories": {
-      "buildResources": "appx-build"
-    },
-    "nsis": {
-      "include": "installer.nsh",
-      "runAfterFinish": true
-    },
-    "win": {
-      "icon": "appx-build/the-pill-app-icon.ico"
-    },
-    "appx": {
-      "applicationId": "ThePill",
-      "customManifestPath": "AppxManifest.xml",
-      "displayName": "The Pill",
-      "identityName": "ThePill",
-      "publisherDisplayName": "The Pill"
-    }
+    "electron": "^45.0.0"
   }
 }

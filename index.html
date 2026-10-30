@@ -24,10 +24,6 @@
         <section class="pill-settings-menu" aria-label="Pill Settings" aria-hidden="true" inert>
           <h2 class="pill-settings-title">Pill Settings</h2>
           <div class="pill-settings-options">
-            <button class="pill-settings-option" type="button" data-pill-option="apps" aria-pressed="true">
-              <span class="pill-settings-indicator" aria-hidden="true"></span>
-              <span>Apps</span>
-            </button>
             <button class="pill-settings-option" type="button" data-pill-option="volume" aria-pressed="true">
               <span class="pill-settings-indicator" aria-hidden="true"></span>
               <span>Volume</span>
@@ -35,6 +31,10 @@
             <button class="pill-settings-option" type="button" data-pill-option="music" aria-pressed="true">
               <span class="pill-settings-indicator" aria-hidden="true"></span>
               <span>Music</span>
+            </button>
+            <button class="pill-settings-option" type="button" data-pill-option="apps" aria-pressed="true">
+              <span class="pill-settings-indicator" aria-hidden="true"></span>
+              <span>Apps</span>
             </button>
             <button class="pill-settings-option" type="button" data-pill-option="date" aria-pressed="true">
               <span class="pill-settings-indicator" aria-hidden="true"></span>
@@ -50,28 +50,21 @@
             </button>
           </div>
         </section>
-        <div class="apps-main">
         <div class="pill-actions">
-          <button class="apps-toggle" type="button" aria-label="Apps" aria-expanded="false" aria-controls="apps-controls">
-            <img src="pillicons/option.png" alt="" aria-hidden="true" />
-          </button>
           <button class="volume-toggle" type="button" aria-label="Volume" aria-expanded="false" aria-controls="volume-controls">
             <img src="pillicons/volume.png" alt="" aria-hidden="true" />
           </button>
           <button class="music-toggle" type="button" aria-label="Music" aria-expanded="false" aria-controls="music-controls">
             <img src="pillicons/music.png" alt="" aria-hidden="true" />
           </button>
+          <button class="apps-toggle" type="button" aria-label="Apps" aria-expanded="false" aria-controls="apps-panel">
+            Apps
+          </button>
         </div>
         <div class="volume-controls" id="volume-controls" aria-hidden="true" inert>
           <input class="volume-slider" id="volume-slider" type="range" min="0" max="100" step="1" value="50" aria-label="System volume" disabled />
           <output class="volume-value" for="volume-slider">--%</output>
           <span class="volume-error" role="status" aria-live="polite"></span>
-        </div>
-        <div class="apps-controls" id="apps-controls" aria-hidden="true" inert>
-          <input class="apps-search" type="search" placeholder="Search installed apps" aria-label="Search installed apps" autocomplete="off" />
-          <div class="apps-list" role="listbox" aria-label="Installed apps"></div>
-          <span class="apps-status" role="status" aria-live="polite"></span>
-        </div>
         </div>
         <section class="music-controls" id="music-controls" aria-hidden="true" inert aria-label="Music player">
           <div class="music-artwork-wrap">
@@ -96,24 +89,20 @@
             </div>
           </div>
         </section>
+        <section class="apps-panel" id="apps-panel" aria-hidden="true" inert aria-label="Launchable Windows apps">
+          <div class="apps-panel-header">
+            <input class="apps-search" type="search" aria-label="Search apps" placeholder="Search apps" autocomplete="off" />
+          </div>
+          <div class="apps-list" role="list" aria-label="Available apps"></div>
+        </section>
+        <section class="app-switcher" aria-label="Open apps" aria-hidden="true" inert>
+          <div class="app-switcher-track" role="status" aria-live="polite"></div>
+        </section>
         <div class="pill-datetime">
           <time class="pill-date" aria-label="Current date"></time>
           <time class="pill-clock" aria-label="Current time"></time>
           <span class="battery-percentage" aria-label="Battery charge" hidden></span>
         </div>
-        <section class="running-apps" aria-label="Running apps">
-          <div class="running-apps-header">
-            <span>Running apps</span>
-          </div>
-          <div class="running-apps-list" role="list"></div>
-          <span class="running-apps-status" role="status" aria-live="polite"></span>
-        </section>
-        <section class="running-app-selector" aria-label="Running app selector" aria-hidden="true" inert>
-          <span class="running-app-selector-title" aria-live="polite"></span>
-          <span class="running-app-selector-loading" role="status" aria-label="Loading running apps" hidden>
-            <span></span><span></span><span></span>
-          </span>
-        </section>
       </div>
     </div>
     <script src="renderer.js"></script>

@@ -8,7 +8,6 @@ const {
   shell,
 } = require('electron');
 const { spawn } = require('node:child_process');
-const fs = require('node:fs/promises');
 const path = require('node:path');
 const readline = require('node:readline');
 const loudness = require('loudness');
@@ -18,36 +17,17 @@ app.setName('The Pill');
 const collapsedSize = { width: 480, height: 8 };
 const expandedSize = { width: 480, height: 42 };
 const settingsExpandedSize = { width: 480, height: 330 };
-const appsExpandedSize = { width: 480, height: 460 };
 const musicExpandedSize = { width: 480, height: 240 };
+const appsExpandedSize = { width: 480, height: 360 };
 const notificationSize = { width: 480, height: 120 };
-const installedApps = new Map();
-const runningWindows = new Map();
+const appSwitcherSize = { width: 480, height: 58 };
 let notificationProcess;
 let appIsQuitting = false;
-let runningAppSelectionActive = false;
-let windowActivationProcess;
-let windowActivationReady;
-let nextWindowActivationRequestId = 0;
-const pendingWindowActivations = new Map();
-
-const windowApi = `
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-public static class PillWindowApi {
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextLength(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int command);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-}`;
+let launchableAppsCache;
+let launchableAppsLoad;
+let windowHelper;
+let listedWindowHandles = new Set();
+let watchingAppSwitcherRelease = false;
 
 function runPowerShell(script) {
   const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
@@ -84,188 +64,6 @@ function runPowerShell(script) {
       }
     });
   });
-}
-
-function createWindowActivationWorkerScript() {
-  return `
-$ErrorActionPreference = 'Stop'
-[Console]::InputEncoding = [System.Text.Encoding]::UTF8
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$null = Add-Type -TypeDefinition @'
-${windowApi}
-'@
-[Console]::Out.WriteLine('{"ready":true}')
-[Console]::Out.Flush()
-while ($null -ne ($line = [Console]::In.ReadLine())) {
-  $request = $null
-  try {
-    $request = $line | ConvertFrom-Json
-    $hWnd = [IntPtr]([System.Convert]::ToInt64([string]$request.id, 16))
-    if (-not [PillWindowApi]::IsWindow($hWnd)) { throw 'The selected window is no longer available.' }
-    if ([PillWindowApi]::IsIconic($hWnd)) {
-      [void][PillWindowApi]::ShowWindowAsync($hWnd, 9)
-    }
-    if (-not [PillWindowApi]::SetForegroundWindow($hWnd)) {
-      throw 'Windows did not allow the selected app to become active.'
-    }
-    $response = @{ requestId = $request.requestId; success = $true }
-  } catch {
-    $response = @{ requestId = $request.requestId; error = $_.Exception.Message }
-  }
-  [Console]::Out.WriteLine((ConvertTo-Json -InputObject $response -Compress))
-  [Console]::Out.Flush()
-}`;
-}
-
-function startWindowActivationWorker() {
-  if (windowActivationProcess) {
-    return windowActivationReady;
-  }
-
-  const encodedScript = Buffer.from(createWindowActivationWorkerScript(), 'utf16le').toString('base64');
-  let resolveReady;
-  let rejectReady;
-  let readySettled = false;
-  const ready = new Promise((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-  const settleStartupFailure = (error) => {
-    if (readySettled) {
-      return;
-    }
-    readySettled = true;
-    clearTimeout(startupTimeout);
-    rejectReady(error);
-  };
-  const worker = spawn('powershell.exe', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-WindowStyle',
-    'Hidden',
-    '-EncodedCommand',
-    encodedScript,
-  ], { windowsHide: true });
-  const startupTimeout = setTimeout(() => {
-    settleStartupFailure(new Error('Timed out while starting the app activation worker.'));
-    worker.kill();
-  }, 10000);
-
-  windowActivationProcess = worker;
-  windowActivationReady = ready;
-  const output = readline.createInterface({ input: worker.stdout });
-  output.on('line', (line) => {
-    let response;
-    try {
-      response = JSON.parse(line);
-    } catch (error) {
-      console.error('Could not parse app activation worker output:', error);
-      worker.kill();
-      return;
-    }
-
-    if (response.ready === true) {
-      if (!readySettled) {
-        readySettled = true;
-        clearTimeout(startupTimeout);
-        resolveReady();
-      }
-      return;
-    }
-
-    const pending = pendingWindowActivations.get(response.requestId);
-    if (!pending) {
-      console.error('Received an unexpected app activation worker response.');
-      worker.kill();
-      return;
-    }
-    pendingWindowActivations.delete(response.requestId);
-    if (typeof response.error === 'string') {
-      pending.reject(new Error(response.error));
-    } else if (response.success === true) {
-      pending.resolve();
-    } else {
-      pending.reject(new Error('App activation worker returned an invalid response.'));
-    }
-  });
-  worker.stderr.setEncoding('utf8');
-  worker.stderr.on('data', (data) => {
-    console.error('App activation worker:', data.trim());
-  });
-  worker.on('error', (error) => {
-    settleStartupFailure(error);
-  });
-  worker.on('close', (code) => {
-    settleStartupFailure(new Error(`App activation worker exited before starting (code ${code}).`));
-    const error = new Error(`App activation worker exited (code ${code}).`);
-    for (const pending of pendingWindowActivations.values()) {
-      pending.reject(error);
-    }
-    pendingWindowActivations.clear();
-    output.close();
-    if (windowActivationProcess === worker) {
-      windowActivationProcess = undefined;
-      windowActivationReady = undefined;
-    }
-  });
-
-  return ready;
-}
-
-async function requestWindowActivation(id) {
-  await startWindowActivationWorker();
-  const requestId = ++nextWindowActivationRequestId;
-  const response = new Promise((resolve, reject) => {
-    pendingWindowActivations.set(requestId, { resolve, reject });
-  });
-  const request = JSON.stringify({ requestId, id });
-  if (!windowActivationProcess || !windowActivationProcess.stdin.writable) {
-    pendingWindowActivations.delete(requestId);
-    throw new Error('App activation worker is not available.');
-  }
-  windowActivationProcess.stdin.write(`${request}\n`, (error) => {
-    if (error) {
-      const pending = pendingWindowActivations.get(requestId);
-      if (pending) {
-        pendingWindowActivations.delete(requestId);
-        pending.reject(error);
-      }
-    }
-  });
-  await response;
-}
-
-async function activateRunningWindowOnce(id) {
-  await runPowerShell(createWindowScript(
-    { id },
-    `
-  $hWnd = [IntPtr]([System.Convert]::ToInt64([string]$request.id, 16))
-  if (-not [PillWindowApi]::IsWindow($hWnd)) { throw 'The selected window is no longer available.' }
-  if ([PillWindowApi]::IsIconic($hWnd)) {
-    [void][PillWindowApi]::ShowWindowAsync($hWnd, 9)
-  }
-  if (-not [PillWindowApi]::SetForegroundWindow($hWnd)) {
-    throw 'Windows did not allow the selected app to become active.'
-  }
-`,
-  ));
-}
-
-function createWindowScript(request, body) {
-  const requestJson = Buffer.from(JSON.stringify(request)).toString('base64');
-  return `
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-try {
-  Add-Type -TypeDefinition @'
-${windowApi}
-'@
-  $request = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${requestJson}')) | ConvertFrom-Json
-  ${body}
-} catch {
-  [Console]::Error.WriteLine($_.Exception.Message)
-  exit 1
-}`;
 }
 
 function createMediaScript(request, body) {
@@ -494,203 +292,6 @@ async function controlMediaSession(sessionId, action) {
   }
 }
 
-async function getRunningWindows() {
-  if (process.platform !== 'win32') {
-    throw new Error('Running window management is only supported on Windows.');
-  }
-
-  const output = await runPowerShell(createWindowScript(
-    { processId: process.pid },
-    `
-  $windows = [System.Collections.Generic.List[object]]::new()
-  $excludedProcessNames = @(
-    'LockApp',
-    'SearchApp',
-    'SearchHost',
-    'ShellExperienceHost',
-    'StartMenuExperienceHost',
-    'TextInputHost',
-    'WidgetService',
-    'Widgets'
-  )
-  $processNames = @{}
-  foreach ($process in Get-Process) {
-    $processNames[[uint32]$process.Id] = $process.ProcessName
-  }
-  $foreground = [PillWindowApi]::GetForegroundWindow()
-  $callback = [PillWindowApi+EnumWindowsProc] {
-    param($hWnd, $lParam)
-    if (-not [PillWindowApi]::IsWindowVisible($hWnd)) { return $true }
-    $length = [PillWindowApi]::GetWindowTextLength($hWnd)
-    if ($length -le 0) { return $true }
-    [uint32]$ownerProcessId = 0
-    [void][PillWindowApi]::GetWindowThreadProcessId($hWnd, [ref]$ownerProcessId)
-    if ($ownerProcessId -eq $request.processId) { return $true }
-    $processName = $processNames[$ownerProcessId]
-    if ($processName -in $excludedProcessNames) { return $true }
-    $title = [System.Text.StringBuilder]::new($length + 1)
-    [void][PillWindowApi]::GetWindowText($hWnd, $title, $title.Capacity)
-    if ($title.ToString() -eq 'Program Manager') { return $true }
-    $handle = $hWnd.ToInt64().ToString('X')
-    [void]$windows.Add([pscustomobject]@{
-      id = $handle
-      title = $title.ToString()
-      minimized = [PillWindowApi]::IsIconic($hWnd)
-      active = ($hWnd -eq $foreground)
-    })
-    return $true
-  }
-  [void][PillWindowApi]::EnumWindows($callback, [IntPtr]::Zero)
-  ConvertTo-Json -InputObject @($windows.ToArray()) -Compress
-`,
-  ));
-
-  const windows = output ? JSON.parse(output) : [];
-  runningWindows.clear();
-  for (const window of windows) {
-    runningWindows.set(window.id, true);
-  }
-  return windows;
-}
-
-async function toggleRunningWindow(id) {
-  if (process.platform !== 'win32') {
-    throw new Error('Running window management is only supported on Windows.');
-  }
-  if (!runningWindows.has(id)) {
-    throw new Error('The selected window is no longer available.');
-  }
-
-  await runPowerShell(createWindowScript(
-    { id },
-    `
-  $hWnd = [IntPtr]([System.Convert]::ToInt64([string]$request.id, 16))
-  if (-not [PillWindowApi]::IsWindow($hWnd)) { throw 'The selected window is no longer available.' }
-  if ([PillWindowApi]::IsIconic($hWnd) -or $hWnd -ne [PillWindowApi]::GetForegroundWindow()) {
-    if ([PillWindowApi]::IsIconic($hWnd)) {
-      [void][PillWindowApi]::ShowWindowAsync($hWnd, 9)
-    }
-    if (-not [PillWindowApi]::SetForegroundWindow($hWnd)) {
-      throw 'Windows did not allow the selected app to become active.'
-    }
-  } else {
-    [void][PillWindowApi]::ShowWindowAsync($hWnd, 6)
-  }
-`,
-  ));
-}
-
-async function activateRunningWindow(id) {
-  if (process.platform !== 'win32') {
-    throw new Error('Running window management is only supported on Windows.');
-  }
-  if (!runningWindows.has(id)) {
-    throw new Error('The selected window is no longer available.');
-  }
-
-  try {
-    await requestWindowActivation(id);
-  } catch (error) {
-    console.error('App activation worker failed; retrying with one-shot activation:', error);
-    try {
-      await activateRunningWindowOnce(id);
-    } catch (fallbackError) {
-      throw new Error(
-        `Could not activate the selected app using the worker or fallback: ${fallbackError.message}`,
-        { cause: error },
-      );
-    }
-  }
-}
-
-async function findStartMenuShortcuts(directory) {
-  let entries;
-  try {
-    entries = await fs.readdir(directory, { withFileTypes: true });
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      return [];
-    }
-    throw error;
-  }
-
-  const shortcuts = [];
-  for (const entry of entries) {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      shortcuts.push(...await findStartMenuShortcuts(entryPath));
-    } else if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.lnk') {
-      shortcuts.push({
-        name: path.basename(entry.name, path.extname(entry.name)),
-        path: entryPath,
-      });
-    }
-  }
-  return shortcuts;
-}
-
-async function getInstalledApps() {
-  if (process.platform !== 'win32') {
-    throw new Error('App search is only supported on Windows.');
-  }
-
-  const directories = [
-    path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
-    path.join(process.env.ProgramData || 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
-  ];
-  const [shortcutLists, startAppsOutput] = await Promise.all([
-    Promise.all(directories.map(findStartMenuShortcuts)),
-    runPowerShell(`
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-ConvertTo-Json -InputObject @(Get-StartApps | Select-Object Name, AppID) -Compress
-`),
-  ]);
-  const shortcuts = shortcutLists.flat();
-  const startApps = JSON.parse(startAppsOutput);
-  if (!Array.isArray(startApps)) {
-    throw new Error('Windows returned an invalid list of Start Menu apps.');
-  }
-  const packagedApps = startApps
-    .filter((startApp) => (
-      startApp
-      && typeof startApp === 'object'
-      && typeof startApp.Name === 'string'
-      && startApp.Name.trim()
-      && typeof startApp.AppID === 'string'
-      && startApp.AppID.includes('!')
-    ))
-    .map((startApp) => ({
-      name: startApp.Name.trim(),
-      appId: startApp.AppID,
-    }));
-  const uniqueApps = new Map();
-  for (const appEntry of [
-    ...shortcuts.map((shortcut) => ({
-      name: shortcut.name,
-      launch: { type: 'shortcut', target: shortcut.path },
-    })),
-    ...packagedApps.map((packagedApp) => ({
-      name: packagedApp.name,
-      launch: { type: 'appId', target: packagedApp.appId },
-    })),
-  ]) {
-    const key = appEntry.name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
-    if (!uniqueApps.has(key)) {
-      uniqueApps.set(key, appEntry);
-    }
-  }
-  const deduplicatedApps = [...uniqueApps.values()];
-  deduplicatedApps.sort((left, right) => left.name.localeCompare(right.name));
-
-  installedApps.clear();
-  return deduplicatedApps.map((appEntry, index) => {
-    const id = String(index);
-    installedApps.set(id, appEntry.launch);
-    return { id, name: appEntry.name };
-  });
-}
-
 async function getBatteryStatus() {
   if (process.platform !== 'win32') {
     throw new Error('Battery status is only supported on Windows.');
@@ -728,6 +329,372 @@ if ($null -eq $battery) {
     percentage: battery.Percentage,
     isCharging: battery.IsCharging,
   };
+}
+
+async function loadLaunchableApps() {
+  if (process.platform !== 'win32') {
+    throw new Error('App launching is only supported on Windows.');
+  }
+
+  const output = await runPowerShell(`
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$apps = @(Get-StartApps |
+  Where-Object { $_.Name -and $_.AppID } |
+  Sort-Object Name, AppID |
+  ForEach-Object {
+    [pscustomobject]@{
+      name = [string]$_.Name
+      appId = [string]$_.AppID
+    }
+  })
+ConvertTo-Json -InputObject $apps -Compress -Depth 3
+`);
+  const apps = JSON.parse(output);
+  if (!Array.isArray(apps) || apps.some((app) => (
+    !app
+    || typeof app.name !== 'string'
+    || typeof app.appId !== 'string'
+    || !app.name
+    || !app.appId
+  ))) {
+    throw new Error('Windows returned an invalid list of launchable apps.');
+  }
+
+  return apps;
+}
+
+function getLaunchableApps() {
+  if (launchableAppsCache) {
+    return Promise.resolve(launchableAppsCache);
+  }
+  if (!launchableAppsLoad) {
+    launchableAppsLoad = loadLaunchableApps()
+      .then((apps) => {
+        launchableAppsCache = apps;
+        return apps;
+      })
+      .catch((error) => {
+        launchableAppsLoad = undefined;
+        throw error;
+      });
+  }
+  return launchableAppsLoad;
+}
+
+async function launchApp(appId) {
+  if (process.platform !== 'win32') {
+    throw new Error('App launching is only supported on Windows.');
+  }
+  if (typeof appId !== 'string' || !appId) {
+    throw new Error('Invalid app launch request.');
+  }
+
+  const apps = await getLaunchableApps();
+  if (!apps.some((app) => app.appId === appId)) {
+    throw new Error('The requested app is no longer available.');
+  }
+
+  const request = Buffer.from(JSON.stringify({ appId })).toString('base64');
+  await runPowerShell(`
+$ErrorActionPreference = 'Stop'
+$request = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${request}')) | ConvertFrom-Json
+Start-Process -FilePath 'explorer.exe' -ArgumentList ('"shell:AppsFolder\\' + $request.appId + '"')
+`);
+}
+
+function createWindowHelperScript() {
+  return `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public class PillWindowInfo {
+  public long hwnd { get; set; }
+  public string title { get; set; }
+  public string appName { get; set; }
+}
+
+public static class PillWindows {
+  delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+  [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextLength(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder text, int count);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hWnd, uint command);
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int GetWindowLong(IntPtr hWnd, int index);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int command);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extraInfo);
+  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out int value, int size);
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
+
+  static readonly Dictionary<string, string> AppNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+  static string GetAppName(uint processId) {
+    string path = null;
+    IntPtr process = OpenProcess(0x1000, false, processId);
+    if (process != IntPtr.Zero) {
+      try {
+        StringBuilder buffer = new StringBuilder(1024);
+        uint size = (uint)buffer.Capacity;
+        if (QueryFullProcessImageName(process, 0, buffer, ref size)) {
+          path = buffer.ToString();
+        }
+      } finally {
+        CloseHandle(process);
+      }
+    }
+    if (path == null) {
+      return null;
+    }
+
+    string name;
+    if (AppNames.TryGetValue(path, out name)) {
+      return name;
+    }
+    try {
+      name = FileVersionInfo.GetVersionInfo(path).FileDescription;
+    } catch {
+      name = null;
+    }
+    if (String.IsNullOrWhiteSpace(name)) {
+      name = Path.GetFileNameWithoutExtension(path);
+    }
+    name = name.Trim();
+    AppNames[path] = name;
+    return name;
+  }
+
+  public static PillWindowInfo[] List(uint excludedProcessId) {
+    List<PillWindowInfo> windows = new List<PillWindowInfo>();
+    EnumWindows((hWnd, lParam) => {
+      if (!IsWindowVisible(hWnd)) {
+        return true;
+      }
+      int exStyle = GetWindowLong(hWnd, -20);
+      bool isAppWindow = (exStyle & 0x40000) != 0;
+      bool isToolWindow = (exStyle & 0x80) != 0;
+      bool isNoActivate = (exStyle & 0x8000000) != 0;
+      if (!isAppWindow && (isToolWindow || isNoActivate || GetWindow(hWnd, 4) != IntPtr.Zero)) {
+        return true;
+      }
+      int cloaked;
+      if (DwmGetWindowAttribute(hWnd, 14, out cloaked, 4) == 0 && cloaked != 0) {
+        return true;
+      }
+      int titleLength = GetWindowTextLength(hWnd);
+      if (titleLength == 0) {
+        return true;
+      }
+      StringBuilder className = new StringBuilder(256);
+      GetClassName(hWnd, className, className.Capacity);
+      if (className.ToString() == "Progman") {
+        return true;
+      }
+      uint processId;
+      GetWindowThreadProcessId(hWnd, out processId);
+      if (processId == excludedProcessId) {
+        return true;
+      }
+
+      StringBuilder title = new StringBuilder(titleLength + 1);
+      GetWindowText(hWnd, title, title.Capacity);
+      string titleText = title.ToString().Trim();
+      if (titleText.Length == 0) {
+        return true;
+      }
+      // Store apps are hosted by ApplicationFrameHost, so their title is the useful name.
+      string appName = className.ToString() == "ApplicationFrameWindow" ? null : GetAppName(processId);
+      windows.Add(new PillWindowInfo {
+        hwnd = hWnd.ToInt64(),
+        title = titleText,
+        appName = String.IsNullOrWhiteSpace(appName) ? titleText : appName,
+      });
+      return true;
+    }, IntPtr.Zero);
+    return windows.ToArray();
+  }
+
+  public static bool Activate(long handle) {
+    IntPtr hWnd = new IntPtr(handle);
+    if (!IsWindow(hWnd)) {
+      return false;
+    }
+    if (IsIconic(hWnd)) {
+      ShowWindow(hWnd, 9);
+    }
+    if (SetForegroundWindow(hWnd) && GetForegroundWindow() == hWnd) {
+      return true;
+    }
+    // Windows only lets a process take the foreground after it receives input, so tap Alt first.
+    keybd_event(0x12, 0, 0, UIntPtr.Zero);
+    keybd_event(0x12, 0, 2, UIntPtr.Zero);
+    SetForegroundWindow(hWnd);
+    return GetForegroundWindow() == hWnd;
+  }
+
+  public static bool IsAltDown() {
+    return (GetAsyncKeyState(0x12) & 0x8000) != 0;
+  }
+}
+'@
+
+$excludedProcessId = [uint32]${process.pid}
+while ($true) {
+  $line = [Console]::In.ReadLine()
+  if ($null -eq $line) { break }
+  try {
+    $parts = $line.Split(' ')
+    switch ($parts[0]) {
+      'list' { $result = @{ windows = [PillWindows]::List($excludedProcessId) } }
+      'activate' { $result = @{ activated = [PillWindows]::Activate([long]$parts[1]) } }
+      'alt' { $result = @{ altDown = [PillWindows]::IsAltDown() } }
+      default { throw 'Unknown window helper request.' }
+    }
+  } catch {
+    $result = @{ error = $_.Exception.Message }
+  }
+  [Console]::Out.WriteLine((ConvertTo-Json -InputObject $result -Compress -Depth 4))
+  [Console]::Out.Flush()
+}`;
+}
+
+function getWindowHelper() {
+  if (windowHelper) {
+    return windowHelper;
+  }
+
+  const encodedScript = Buffer.from(createWindowHelperScript(), 'utf16le').toString('base64');
+  const child = spawn('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-WindowStyle',
+    'Hidden',
+    '-EncodedCommand',
+    encodedScript,
+  ], { windowsHide: true });
+  const helper = { process: child, pending: [] };
+  windowHelper = helper;
+
+  const output = readline.createInterface({ input: child.stdout });
+  output.on('line', (line) => {
+    const request = helper.pending.shift();
+    if (!request) {
+      return;
+    }
+
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch (error) {
+      request.reject(new Error('Could not parse the Windows window helper output.'));
+      return;
+    }
+    if (message && typeof message.error === 'string') {
+      request.reject(new Error(message.error));
+    } else {
+      request.resolve(message);
+    }
+  });
+
+  const stopHelper = (error) => {
+    if (windowHelper === helper) {
+      windowHelper = undefined;
+    }
+    for (const request of helper.pending.splice(0)) {
+      request.reject(error);
+    }
+  };
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (data) => {
+    console.error('Windows window helper:', data.trim());
+  });
+  child.stdin.on('error', (error) => {
+    console.error('Failed to write to the Windows window helper:', error);
+  });
+  child.on('error', (error) => {
+    console.error('Failed to start the Windows window helper:', error);
+    stopHelper(error);
+  });
+  child.on('close', (code) => {
+    if (!appIsQuitting) {
+      console.error(`Windows window helper exited with code ${code}.`);
+    }
+    stopHelper(new Error('The Windows window helper stopped.'));
+  });
+  return helper;
+}
+
+function requestWindowHelper(command) {
+  if (process.platform !== 'win32') {
+    return Promise.reject(new Error('App switching is only supported on Windows.'));
+  }
+
+  const helper = getWindowHelper();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error('Timed out while communicating with Windows.'));
+      helper.process.kill();
+    }, 10000);
+    helper.pending.push({
+      resolve: (message) => {
+        clearTimeout(timeout);
+        resolve(message);
+      },
+      reject: (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    });
+    helper.process.stdin.write(`${command}\n`);
+  });
+}
+
+async function getOpenWindows() {
+  const { windows } = await requestWindowHelper('list');
+  if (!Array.isArray(windows) || windows.some((openWindow) => (
+    !openWindow
+    || !Number.isSafeInteger(openWindow.hwnd)
+    || typeof openWindow.title !== 'string'
+    || typeof openWindow.appName !== 'string'
+  ))) {
+    throw new Error('Windows returned an invalid list of open apps.');
+  }
+
+  listedWindowHandles = new Set(windows.map((openWindow) => openWindow.hwnd));
+  return windows.map(({ hwnd, title, appName }) => ({ hwnd, title, appName }));
+}
+
+async function activateWindow(hwnd) {
+  if (!listedWindowHandles.has(hwnd)) {
+    throw new Error('The requested app is no longer available.');
+  }
+
+  const { activated } = await requestWindowHelper(`activate ${hwnd}`);
+  if (activated !== true) {
+    throw new Error('Windows did not switch to the selected app.');
+  }
+}
+
+async function isAltKeyDown() {
+  const { altDown } = await requestWindowHelper('alt');
+  return altDown === true;
 }
 
 function createWindow() {
@@ -839,13 +806,33 @@ function createWindow() {
 
     setWindowSize(isOpen ? settingsExpandedSize : expandedSize);
   });
-  ipcMain.handle('pill:focus-window', (event) => {
-    if (event.sender !== window.webContents) {
-      throw new Error('Unauthorized pill focus request');
+  ipcMain.handle('pill:set-apps-open', (event, isOpen) => {
+    if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
+      throw new Error('Unauthorized pill apps panel request');
     }
-    window.setIgnoreMouseEvents(false);
-    window.focus();
-    window.webContents.focus();
+
+    setWindowSize(isOpen ? appsExpandedSize : expandedSize);
+  });
+  ipcMain.handle('pill:set-app-switcher-open', (event, isOpen) => {
+    if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
+      throw new Error('Unauthorized pill app switcher request');
+    }
+
+    setWindowSize(isOpen ? appSwitcherSize : expandedSize);
+  });
+  ipcMain.handle('pill:get-open-windows', (event) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized open apps request');
+    }
+
+    return getOpenWindows();
+  });
+  ipcMain.handle('pill:activate-window', (event, hwnd) => {
+    if (event.sender !== window.webContents || !Number.isSafeInteger(hwnd)) {
+      throw new Error('Invalid app switch request');
+    }
+
+    return activateWindow(hwnd);
   });
   ipcMain.handle('pill:set-notification-open', (event, isOpen) => {
     if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
@@ -858,14 +845,6 @@ function createWindow() {
       throw new Error('Unauthorized notification settings request');
     }
     await shell.openExternal('ms-settings:privacy-notifications');
-  });
-  ipcMain.on('pill:set-apps-open', (event, isOpen) => {
-    if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
-      return;
-    }
-
-    const size = isOpen ? appsExpandedSize : expandedSize;
-    setWindowSize(size);
   });
   ipcMain.on('pill:set-music-open', (event, isOpen) => {
     if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
@@ -891,71 +870,6 @@ function createWindow() {
     }
     await controlMediaSession(sessionId, action);
   });
-  ipcMain.handle('pill:get-apps', async (event) => {
-    if (event.sender !== window.webContents) {
-      throw new Error('Unauthorized app list request');
-    }
-    return getInstalledApps();
-  });
-  ipcMain.handle('pill:launch-app', async (event, id) => {
-    if (event.sender !== window.webContents || typeof id !== 'string') {
-      throw new Error('Invalid app launch request');
-    }
-
-    const launch = installedApps.get(id);
-    if (!launch) {
-      throw new Error('The selected app is not available.');
-    }
-
-    if (launch.type === 'shortcut') {
-      const error = await shell.openPath(launch.target);
-      if (error) {
-        throw new Error(`Could not launch the selected app: ${error}`);
-      }
-      return;
-    }
-
-    await runPowerShell(createWindowScript(
-      { appId: launch.target },
-      `
-  if ([string]$request.appId -notmatch '^[^\\\\/:*?"<>|]+![^\\\\/:*?"<>|]+$') {
-    throw 'The selected app ID is invalid.'
-  }
-  Start-Process -FilePath 'explorer.exe' -ArgumentList ('shell:AppsFolder\\' + [string]$request.appId)
-`,
-    ));
-  });
-  ipcMain.handle('pill:get-running-windows', async (event) => {
-    if (event.sender !== window.webContents) {
-      throw new Error('Unauthorized running windows request');
-    }
-    return getRunningWindows();
-  });
-  ipcMain.handle('pill:toggle-running-window', async (event, id) => {
-    if (
-      event.sender !== window.webContents
-      || typeof id !== 'string'
-      || !/^[0-9A-Fa-f]+$/.test(id)
-    ) {
-      throw new Error('Invalid running window request');
-    }
-    await toggleRunningWindow(id);
-  });
-  ipcMain.handle('pill:activate-running-window', async (event, id) => {
-    if (
-      event.sender !== window.webContents
-      || typeof id !== 'string'
-      || !/^[0-9A-Fa-f]+$/.test(id)
-    ) {
-      throw new Error('Invalid running window request');
-    }
-    await activateRunningWindow(id);
-  });
-  ipcMain.on('pill:running-selection-ended', (event) => {
-    if (event.sender === window.webContents) {
-      runningAppSelectionActive = false;
-    }
-  });
   ipcMain.handle('pill:get-volume', (event) => {
     if (event.sender !== window.webContents) {
       throw new Error('Unauthorized volume request');
@@ -969,6 +883,20 @@ function createWindow() {
     }
 
     return getBatteryStatus();
+  });
+  ipcMain.handle('pill:get-launchable-apps', (event) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized launchable apps request');
+    }
+
+    return getLaunchableApps();
+  });
+  ipcMain.handle('pill:launch-app', (event, appId) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized app launch request');
+    }
+
+    return launchApp(appId);
   });
   ipcMain.handle('pill:set-volume', (event, volume) => {
     if (
@@ -993,26 +921,45 @@ function createWindow() {
       window.webContents.send('pill:shortcut', action, data);
     }
   };
-  if (!globalShortcut.register('Alt+Space', () => sendShortcut('apps-menu'))) {
-    console.error('Could not register the Alt+Space shortcut.');
-  }
   if (!globalShortcut.register('Alt+Shift+W', () => sendShortcut('toggle-idle-visibility'))) {
     console.error('Could not register the Alt+Shift+W shortcut.');
   }
-  if (!globalShortcut.register('Alt+Shift+Q', () => {
-    if (runningAppSelectionActive) {
-      sendShortcut('running-apps-cycle');
+  if (!globalShortcut.register('Alt+Space', () => {
+    if (notificationOpen || window.isDestroyed()) {
       return;
     }
-    runningAppSelectionActive = true;
-    const runningAppsPromise = getRunningWindows();
-    sendShortcut('running-apps-start');
-    runningAppsPromise.then((runningApps) => {
-      sendShortcut('running-apps-loaded', runningApps);
-    }).catch((error) => {
-      console.error('Could not load running apps for keyboard selection:', error);
-      sendShortcut('running-apps-error');
-    });
+    window.show();
+    window.focus();
+    sendShortcut('open-apps-search');
+  })) {
+    console.error('Could not register the Alt+Space shortcut.');
+  }
+
+  async function watchAppSwitcherRelease() {
+    if (watchingAppSwitcherRelease) {
+      return;
+    }
+
+    watchingAppSwitcherRelease = true;
+    try {
+      while (await isAltKeyDown()) {
+        await new Promise((resolve) => { setTimeout(resolve, 30); });
+      }
+    } catch (error) {
+      console.error('Failed to read the Alt key state:', error);
+    } finally {
+      watchingAppSwitcherRelease = false;
+    }
+    sendShortcut('app-switcher-release');
+  }
+  if (!globalShortcut.register('Alt+Shift+Q', () => {
+    if (notificationOpen || window.isDestroyed()) {
+      return;
+    }
+    window.show();
+    window.focus();
+    sendShortcut('app-switcher-next');
+    watchAppSwitcherRelease();
   })) {
     console.error('Could not register the Alt+Shift+Q shortcut.');
   }
@@ -1091,8 +1038,11 @@ function startNotificationListener(window) {
 
 app.whenReady().then(() => {
   if (process.platform === 'win32') {
-    startWindowActivationWorker().catch((error) => {
-      console.error('Could not start app activation worker:', error);
+    getLaunchableApps().catch((error) => {
+      console.error('Failed to preload launchable apps:', error);
+    });
+    isAltKeyDown().catch((error) => {
+      console.error('Failed to start the Windows window helper:', error);
     });
   }
   const window = createWindow();
@@ -1111,13 +1061,12 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   appIsQuitting = true;
   globalShortcut.unregisterAll();
-  if (windowActivationProcess) {
-    windowActivationProcess.kill();
-    windowActivationProcess = undefined;
-    windowActivationReady = undefined;
-  }
   if (notificationProcess) {
     notificationProcess.kill();
     notificationProcess = undefined;
+  }
+  if (windowHelper) {
+    windowHelper.process.kill();
+    windowHelper = undefined;
   }
 });

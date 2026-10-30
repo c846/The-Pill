@@ -3,16 +3,6 @@ const pillClock = document.querySelector('.pill-clock');
 const pillDate = document.querySelector('.pill-date');
 const batteryPercentage = document.querySelector('.battery-percentage');
 const pillSettingsMenu = document.querySelector('.pill-settings-menu');
-const appsToggle = document.querySelector('.apps-toggle');
-const appsControls = document.querySelector('.apps-controls');
-const appsSearch = document.querySelector('.apps-search');
-const appsList = document.querySelector('.apps-list');
-const appsStatus = document.querySelector('.apps-status');
-const runningAppsList = document.querySelector('.running-apps-list');
-const runningAppsStatus = document.querySelector('.running-apps-status');
-const runningAppSelector = document.querySelector('.running-app-selector');
-const runningAppSelectorTitle = document.querySelector('.running-app-selector-title');
-const runningAppSelectorLoading = document.querySelector('.running-app-selector-loading');
 const volumeToggle = document.querySelector('.volume-toggle');
 const volumeControls = document.querySelector('.volume-controls');
 const volumeSlider = document.querySelector('.volume-slider');
@@ -20,6 +10,12 @@ const volumeValue = document.querySelector('.volume-value');
 const volumeError = document.querySelector('.volume-error');
 const musicToggle = document.querySelector('.music-toggle');
 const musicControls = document.querySelector('.music-controls');
+const appsToggle = document.querySelector('.apps-toggle');
+const appsPanel = document.querySelector('.apps-panel');
+const appsSearch = document.querySelector('.apps-search');
+const appsList = document.querySelector('.apps-list');
+const appSwitcher = document.querySelector('.app-switcher');
+const appSwitcherTrack = document.querySelector('.app-switcher-track');
 const musicArtwork = document.querySelector('.music-artwork');
 const musicTitle = document.querySelector('.music-title');
 const musicArtist = document.querySelector('.music-artist');
@@ -37,20 +33,10 @@ const notificationClose = document.querySelector('.notification-close');
 const notificationSettings = document.querySelector('.notification-settings');
 let expanded = false;
 let settingsOpen = false;
+let appsOpen = false;
+let keyboardPinned = false;
 let animating = false;
 let opening = false;
-let installedApps = [];
-let runningApps = [];
-let runningAppSelectionIndex = -1;
-let pendingRunningAppCycles = 0;
-let runningAppSelectionLoading = false;
-let runningAppSelectionDataReady = false;
-let runningAppSelectionPillReady = false;
-let runningAppSelectionCommitPending = false;
-let keyboardSelectionActive = false;
-let keyboardPinned = false;
-let runningRefreshTimer;
-let refreshingRunningApps = false;
 let refreshingBattery = false;
 let musicRefreshTimer;
 let refreshingMusic = false;
@@ -65,11 +51,20 @@ let batteryChargingRetriesRemaining = 0;
 let notificationQueue = [];
 let notificationOpen = false;
 let currentNotification;
+let appsRequestId = 0;
+let appsPanelRequestId = 0;
+let launchableApps = [];
+let appSwitcherOpen = false;
+let appSwitcherWindows;
+let appSwitcherIndex = 0;
+let appSwitcherSteps = 0;
+let appSwitcherCommitRequested = false;
+let appSwitcherRequestId = 0;
 
 const pillOptionTargets = new Map([
-  ['apps', appsToggle],
   ['volume', volumeToggle],
   ['music', musicToggle],
+  ['apps', appsToggle],
   ['date', pillDate],
   ['time', pillClock],
   ['battery', batteryPercentage],
@@ -250,37 +245,12 @@ function showNextNotification() {
     : setTimeout(showNextNotification, 7000);
 }
 
-async function minimizeNotificationForAppSwitch() {
-  if (!notificationOpen) {
-    return;
-  }
-
-  clearTimeout(notificationTimer);
-  notificationTimer = undefined;
-  notificationOpen = false;
-  currentNotification = undefined;
-  notificationToast.setAttribute('aria-hidden', 'true');
-  notificationToast.inert = true;
-  pill.classList.remove('notification-open');
-  pill.classList.add('notification-closing');
-  clearTimeout(notificationClosingTimer);
-  notificationClosingTimer = setTimeout(() => {
-    pill.classList.remove('notification-closing');
-  }, 320);
-
-  try {
-    await window.pillApp.setNotificationOpen(false);
-  } catch (error) {
-    console.error('Failed to minimize notification for app switching:', error);
-  }
-}
-
 function enqueueNotification(notification) {
   if (notificationQueue.length >= 20) {
     notificationQueue.shift();
   }
   notificationQueue.push(notification);
-  if (!notificationOpen && !keyboardSelectionActive) {
+  if (!notificationOpen && !appSwitcherOpen) {
     showNextNotification();
   }
 }
@@ -322,8 +292,6 @@ window.pillApp.onNotificationListenerStatus((status) => {
   }
 });
 
-window.addEventListener('blur', cancelRunningAppSelection);
-
 function waitForPillTransition() {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     return Promise.resolve();
@@ -343,6 +311,28 @@ function waitForPillTransition() {
     }
 
     pill.addEventListener('transitionend', finish);
+  });
+}
+
+function waitForAppsPanelTransition() {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const fallback = setTimeout(finish, 500);
+
+    function finish(event) {
+      if (event && (event.target !== appsPanel || event.propertyName !== 'opacity')) {
+        return;
+      }
+
+      clearTimeout(fallback);
+      appsPanel.removeEventListener('transitionend', finish);
+      resolve();
+    }
+
+    appsPanel.addEventListener('transitionend', finish);
   });
 }
 
@@ -385,13 +375,157 @@ function setMusicControlsOpen(isOpen, resizeWindow = true) {
           !pill.classList.contains('music-open')
           && expanded
         ) {
-          if (!appsControls.classList.contains('is-open') && !pill.classList.contains('apps-closing')) {
-            window.pillApp.setMusicOpen(false);
-          }
+          window.pillApp.setMusicOpen(false);
           pill.classList.remove('music-closing');
         }
       });
     }
+  }
+}
+
+function renderLaunchableApps() {
+  const query = appsSearch.value.trim().toLocaleLowerCase();
+  const matchingApps = launchableApps.filter((app) => app.name.toLocaleLowerCase().includes(query));
+  appsList.replaceChildren();
+
+  if (matchingApps.length === 0) {
+    return;
+  }
+
+  for (const app of matchingApps) {
+    const item = document.createElement('div');
+    item.className = 'app-list-item';
+    item.setAttribute('role', 'listitem');
+    const button = document.createElement('button');
+    button.className = 'app-launch-button';
+    button.type = 'button';
+    button.dataset.appId = app.appId;
+    button.textContent = app.name;
+    item.append(button);
+    appsList.append(item);
+  }
+}
+
+async function refreshLaunchableApps() {
+  const requestId = ++appsRequestId;
+  appsList.replaceChildren();
+  try {
+    launchableApps = await window.pillApp.getLaunchableApps();
+    if (requestId !== appsRequestId) {
+      return;
+    }
+    renderLaunchableApps();
+  } catch (error) {
+    if (requestId !== appsRequestId) {
+      return;
+    }
+    console.error('Failed to load launchable apps:', error);
+  }
+}
+
+async function setAppsPanelOpen(isOpen, resizeWindow = true) {
+  if (appsOpen === isOpen) {
+    return;
+  }
+
+  if (!isOpen) {
+    keyboardPinned = false;
+  }
+
+  if (isOpen && (settingsOpen || notificationOpen || animating || opening || appSwitcherOpen)) {
+    return;
+  }
+
+  if (isOpen && pill.classList.contains('music-open')) {
+    setMusicControlsOpen(false, false);
+  }
+  if (isOpen) {
+    finishVolumeAdjustment();
+  }
+
+  const requestId = ++appsPanelRequestId;
+  appsOpen = isOpen;
+  appsToggle.setAttribute('aria-expanded', String(isOpen));
+  appsPanel.setAttribute('aria-hidden', String(!isOpen));
+  appsPanel.inert = !isOpen;
+  if (isOpen) {
+    pill.classList.remove('apps-closing');
+    pill.classList.add('apps-open');
+  } else {
+    appsSearch.value = '';
+    renderLaunchableApps();
+    pill.classList.remove('apps-open');
+    pill.classList.add('apps-closing');
+    await Promise.all([
+      waitForAppsPanelTransition(),
+      waitForPillTransition(),
+    ]);
+    if (requestId !== appsPanelRequestId) {
+      return;
+    }
+    pill.classList.remove('apps-closing');
+  }
+
+  if (resizeWindow) {
+    try {
+      await window.pillApp.setAppsOpen(isOpen);
+    } catch (error) {
+      console.error(`Failed to ${isOpen ? 'open' : 'close'} the apps panel:`, error);
+      if (requestId !== appsPanelRequestId) {
+        return;
+      }
+      if (isOpen) {
+        appsOpen = false;
+        appsToggle.setAttribute('aria-expanded', 'false');
+        appsPanel.setAttribute('aria-hidden', 'true');
+        appsPanel.inert = true;
+        appsSearch.value = '';
+        renderLaunchableApps();
+        keyboardPinned = false;
+        pill.classList.remove('apps-open');
+        return;
+      }
+    }
+  }
+
+  if (isOpen && requestId === appsPanelRequestId) {
+    window.pillApp.setInteractive(true);
+    refreshLaunchableApps();
+    appsSearch.focus();
+  }
+}
+
+function switchAppsToMusic() {
+  const requestId = ++appsPanelRequestId;
+  appsOpen = false;
+  appsToggle.setAttribute('aria-expanded', 'false');
+  appsPanel.setAttribute('aria-hidden', 'true');
+  appsPanel.inert = true;
+  appsSearch.value = '';
+  renderLaunchableApps();
+  pill.classList.remove('apps-open');
+  pill.classList.add('apps-closing');
+
+  setMusicControlsOpen(true, false);
+  Promise.all([
+    waitForAppsPanelTransition(),
+    waitForPillTransition(),
+  ]).then(() => {
+    if (requestId === appsPanelRequestId && pill.classList.contains('music-open')) {
+      pill.classList.remove('apps-closing');
+      window.pillApp.setMusicOpen(true);
+    }
+  });
+}
+
+async function launchSelectedApp(button) {
+  button.disabled = true;
+  try {
+    await window.pillApp.launchApp(button.dataset.appId);
+    await collapsePill();
+  } catch (error) {
+    button.disabled = false;
+    console.error('Failed to launch Windows app:', error);
   }
 }
 
@@ -506,426 +640,247 @@ function finishVolumeAdjustment() {
   volumeSlider.disabled = true;
 }
 
-function renderApps() {
-  const query = appsSearch.value.trim().toLocaleLowerCase();
-  const matches = installedApps.filter((app) => app.name.toLocaleLowerCase().includes(query));
-  appsList.replaceChildren();
-
-  if (matches.length === 0) {
-    appsStatus.textContent = installedApps.length === 0
-      ? 'No Start Menu apps were found.'
-      : 'No apps match your search.';
-    return;
-  }
-
-  appsStatus.textContent = matches.length > 100
-    ? `Showing the first 100 of ${matches.length} apps. Refine your search.`
-    : '';
-  for (const app of matches.slice(0, 100)) {
-    const button = document.createElement('button');
-    button.className = 'app-result';
-    button.type = 'button';
-    button.role = 'option';
-    button.textContent = app.name;
-    button.addEventListener('click', async () => {
-      appsStatus.textContent = `Launching ${app.name}...`;
-      try {
-        await window.pillApp.launchApp(app.id);
-        appsStatus.textContent = '';
-      } catch (error) {
-        appsStatus.textContent = `Could not launch ${app.name}.`;
-        console.error('Failed to launch app:', error);
-      }
-    });
-    appsList.append(button);
-  }
-}
-
-function renderRunningApps(runningApps) {
-  runningAppsList.replaceChildren();
-  if (runningApps.length === 0) {
-    runningAppsStatus.textContent = 'No open apps found.';
-    return;
-  }
-
-  runningAppsStatus.textContent = '';
-  for (const app of runningApps) {
-    const button = document.createElement('button');
-    const name = document.createElement('span');
-    const action = document.createElement('span');
-    const actionLabel = app.minimized || !app.active ? 'Open' : 'Minimize';
-    button.className = 'running-app';
-    button.type = 'button';
-    button.setAttribute('role', 'listitem');
-    button.setAttribute('aria-label', `${actionLabel} ${app.title}`);
-    name.className = 'running-app-name';
-    name.textContent = app.title;
-    action.className = 'running-app-action';
-    action.textContent = actionLabel;
-    button.append(name, action);
-    button.addEventListener('click', async () => {
-      button.disabled = true;
-      const progressLabel = actionLabel === 'Open' ? 'Opening' : 'Minimizing';
-      runningAppsStatus.textContent = `${progressLabel} ${app.title}...`;
-      try {
-        await window.pillApp.toggleRunningWindow(app.id);
-        await refreshRunningApps();
-      } catch (error) {
-        runningAppsStatus.textContent = `Could not ${actionLabel.toLowerCase()} ${app.title}.`;
-        console.error('Failed to manage running app window:', error);
-      } finally {
-        button.disabled = false;
-      }
-    });
-    runningAppsList.append(button);
-  }
-}
-
-async function refreshRunningApps() {
-  if (refreshingRunningApps) {
-    return;
-  }
-  refreshingRunningApps = true;
-  try {
-    const apps = await window.pillApp.getRunningWindows();
-    if (keyboardSelectionActive) {
-      return;
-    }
-    runningApps = apps;
-    renderRunningApps(runningApps);
-  } catch (error) {
-    runningAppsStatus.textContent = 'Could not load open apps.';
-    console.error('Failed to load running apps:', error);
-  } finally {
-    refreshingRunningApps = false;
-  }
-}
-
-function renderRunningAppSelection(animate = false) {
-  const selectedApp = runningApps[runningAppSelectionIndex];
-  const title = selectedApp?.title || (runningAppSelectionDataReady ? 'No open apps found' : '');
-  runningAppSelectorLoading.hidden = runningAppSelectionDataReady;
-  if (animate && title !== runningAppSelectorTitle.textContent) {
-    animateRunningAppTitle(title);
-  } else {
-    runningAppSelectorTitle.textContent = title;
-  }
-}
-
-function animateRunningAppTitle(title) {
-  const outgoingTitles = runningAppSelector.querySelectorAll('.running-app-selector-title-outgoing');
-  for (const outgoingTitle of outgoingTitles) {
-    outgoingTitle.getAnimations().forEach((animation) => animation.cancel());
-    outgoingTitle.remove();
-  }
-  runningAppSelectorTitle.getAnimations().forEach((animation) => animation.cancel());
-
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    runningAppSelectorTitle.textContent = title;
-    return;
-  }
-
-  const outgoingTitle = runningAppSelectorTitle.cloneNode(true);
-  outgoingTitle.classList.add('running-app-selector-title-outgoing');
-  outgoingTitle.setAttribute('aria-hidden', 'true');
-  runningAppSelector.append(outgoingTitle);
-  runningAppSelectorTitle.textContent = title;
-
-  outgoingTitle.animate(
-    [{ opacity: 1 }, { opacity: 0 }],
-    { duration: 180, easing: 'ease-out' },
-  ).onfinish = () => outgoingTitle.remove();
-  runningAppSelectorTitle.animate(
-    [
-      { opacity: 0, transform: 'translateX(24px)' },
-      { opacity: 1, transform: 'translateX(0)' },
-    ],
-    { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
-  );
-}
-
-function updateRunningAppSelectionReadiness() {
-  runningAppSelectionLoading = !runningAppSelectionDataReady || !runningAppSelectionPillReady;
-  if (!runningAppSelectionLoading && runningAppSelectionCommitPending) {
-    runningAppSelectionCommitPending = false;
-    finishRunningAppSelection();
-  }
-}
-
-function advanceRunningAppSelection() {
-  if (!keyboardSelectionActive) {
-    return;
-  }
-  if (!runningAppSelectionDataReady) {
-    pendingRunningAppCycles += 1;
-    return;
-  }
-  if (runningApps.length === 0) {
-    return;
-  }
-
-  runningAppSelectionIndex = (runningAppSelectionIndex + 1) % runningApps.length;
-  renderRunningAppSelection(true);
-}
-
-async function openAppsMenuFromShortcut() {
-  keyboardPinned = true;
-  if (!expanded) {
-    try {
-      await window.pillApp.setExpanded(true);
-    } catch (error) {
-      keyboardPinned = false;
-      console.error('Failed to expand pill for the apps menu:', error);
-      return;
-    }
-    expanded = true;
-    pill.setAttribute('aria-expanded', 'true');
-  }
-  try {
-    await window.pillApp.focusWindow();
-  } catch (error) {
-    console.error('Failed to focus the pill for the apps menu:', error);
-  }
-  window.pillApp.setInteractive(true);
-  if (pill.classList.contains('music-open')) {
-    setMusicControlsOpen(false, false);
-  }
-  setVolumeControlsOpen(false);
-  setAppsControlsOpen(true);
-  appsStatus.textContent = 'Loading apps...';
-  appsSearch.value = '';
-  appsSearch.focus();
-  try {
-    installedApps = await window.pillApp.getApps();
-    if (appsControls.classList.contains('is-open')) {
-      renderApps();
-      appsSearch.focus();
-    }
-  } catch (error) {
-    appsStatus.textContent = 'Could not load installed apps.';
-    console.error('Failed to load installed apps:', error);
-  }
-}
-
-async function startRunningAppSelection() {
-  if (keyboardSelectionActive) {
-    return;
-  }
-
-  keyboardSelectionActive = true;
-  keyboardPinned = true;
-  runningAppSelectionLoading = true;
-  runningAppSelectionDataReady = false;
-  runningAppSelectionPillReady = false;
-  runningAppSelectionCommitPending = false;
-  pendingRunningAppCycles = 0;
-  await minimizeNotificationForAppSwitch();
-  runningApps = [];
-  runningAppSelectionIndex = -1;
-  runningAppSelectorTitle.textContent = '';
-  renderRunningAppSelection();
-  runningAppSelector.setAttribute('aria-hidden', 'false');
-  runningAppSelector.inert = false;
-  pill.classList.add('running-selector-open');
-  if (pill.classList.contains('music-open')) {
-    setMusicControlsOpen(false, false);
-  }
-  setVolumeControlsOpen(false);
-  if (appsControls.classList.contains('is-open')) {
-    setAppsControlsOpen(false, false);
-    finishAppsClosing();
-  }
-  appsSearch.blur();
-  clearInterval(runningRefreshTimer);
-  const focusPromise = window.pillApp.focusWindow();
-  try {
-    await window.pillApp.setExpanded(true);
-    expanded = true;
-    pill.setAttribute('aria-expanded', 'true');
-  } catch (error) {
-    keyboardSelectionActive = false;
-    keyboardPinned = false;
-    runningAppSelectionLoading = false;
-    window.pillApp.endRunningAppSelection();
-    pill.classList.remove('running-selector-open');
-    runningAppSelector.setAttribute('aria-hidden', 'true');
-    runningAppSelector.inert = true;
-    console.error('Failed to expand pill for running app selection:', error);
-    return;
-  }
-  try {
-    await focusPromise;
-  } catch (error) {
-    keyboardSelectionActive = false;
-    keyboardPinned = false;
-    runningAppSelectionLoading = false;
-    window.pillApp.endRunningAppSelection();
-    pill.classList.remove('running-selector-open');
-    runningAppSelector.setAttribute('aria-hidden', 'true');
-    runningAppSelector.inert = true;
-    console.error('Failed to focus pill for running app selection:', error);
-    collapsePill();
-    return;
-  }
-  if (!keyboardSelectionActive) {
-    collapsePill();
-    return;
-  }
-  window.pillApp.setInteractive(true);
-  runningAppSelectionPillReady = true;
-  updateRunningAppSelectionReadiness();
-}
-
-function loadRunningAppSelection(apps) {
-  if (!keyboardSelectionActive) {
-    return;
-  }
-  runningApps = apps.filter((app) => (
-    app
-    && typeof app.id === 'string'
-    && typeof app.title === 'string'
-  ));
-  runningAppSelectionIndex = runningApps.findIndex((app) => app.active);
-  if (runningAppSelectionIndex < 0 && runningApps.length > 0) {
-    runningAppSelectionIndex = 0;
-  }
-  runningAppSelectionDataReady = true;
-  if (runningApps.length > 0 && pendingRunningAppCycles > 0) {
-    runningAppSelectionIndex = (
-      runningAppSelectionIndex + pendingRunningAppCycles
-    ) % runningApps.length;
-  }
-  pendingRunningAppCycles = 0;
-  renderRunningAppSelection();
-  updateRunningAppSelectionReadiness();
-}
-
-async function finishRunningAppSelection() {
-  if (!keyboardSelectionActive) {
-    return;
-  }
-  if (runningAppSelectionLoading) {
-    runningAppSelectionCommitPending = true;
-    return;
-  }
-
-  keyboardSelectionActive = false;
-  keyboardPinned = false;
-  const selectedApp = runningApps[runningAppSelectionIndex];
-  pill.classList.remove('running-selector-open');
-  runningAppSelector.setAttribute('aria-hidden', 'true');
-  runningAppSelector.inert = true;
-  window.pillApp.endRunningAppSelection();
-  collapsePill();
-  if (selectedApp) {
-    window.pillApp.activateRunningWindow(selectedApp.id).catch((error) => {
-      console.error('Failed to activate selected running app:', error);
-    });
-  }
-}
-
-function cancelRunningAppSelection() {
-  if (!keyboardSelectionActive) {
-    return;
-  }
-
-  keyboardSelectionActive = false;
-  keyboardPinned = false;
-  runningAppSelectionLoading = false;
-  runningAppSelectionCommitPending = false;
-  pendingRunningAppCycles = 0;
-  pill.classList.remove('running-selector-open');
-  runningAppSelector.setAttribute('aria-hidden', 'true');
-  runningAppSelector.inert = true;
-  window.pillApp.endRunningAppSelection();
-  collapsePill();
-}
-
-window.pillApp.onShortcut((action, data) => {
-  if (action === 'apps-menu') {
-    openAppsMenuFromShortcut();
-  } else if (action === 'toggle-idle-visibility') {
+window.pillApp.onShortcut((action) => {
+  if (action === 'toggle-idle-visibility') {
     pill.classList.toggle('idle-transparent');
-  } else if (action === 'running-apps-start') {
-    startRunningAppSelection();
-  } else if (action === 'running-apps-cycle') {
-    advanceRunningAppSelection();
-  } else if (action === 'running-apps-loaded') {
-    loadRunningAppSelection(data);
-  } else if (action === 'running-apps-error') {
-    if (keyboardSelectionActive) {
-      runningApps = [];
-      runningAppSelectionIndex = -1;
-      runningAppSelectionDataReady = true;
-      runningAppSelectorLoading.hidden = true;
-      runningAppSelectorTitle.textContent = 'Could not load open apps';
-      updateRunningAppSelectionReadiness();
-    }
+  } else if (action === 'open-apps-search') {
+    openAppsFromShortcut();
+  } else if (action === 'app-switcher-next') {
+    stepAppSwitcher();
+  } else if (action === 'app-switcher-release') {
+    closeAppSwitcher(true);
   }
 });
 
-window.addEventListener('keyup', (event) => {
-  if (
-    keyboardSelectionActive
-    && ['AltLeft', 'AltRight', 'ShiftLeft', 'ShiftRight'].includes(event.code)
-    && (!event.altKey || !event.shiftKey)
-  ) {
-    finishRunningAppSelection();
-  }
-}, true);
+function showAppSwitcherSelection() {
+  const selected = appSwitcherWindows[appSwitcherIndex];
+  const entry = document.createElement('div');
+  entry.className = 'app-switcher-entry';
+  const name = document.createElement('span');
+  name.className = 'app-switcher-name';
+  name.textContent = selected ? selected.appName : 'No open apps';
+  const title = document.createElement('span');
+  title.className = 'app-switcher-title';
+  title.textContent = selected && selected.title !== selected.appName ? selected.title : '';
+  title.hidden = !title.textContent;
+  entry.append(name, title);
 
-function finishAppsClosing() {
-  pill.classList.remove('apps-open', 'apps-closing', 'apps-content-ready');
-  appsControls.classList.remove('is-open');
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  for (const previousEntry of appSwitcherTrack.querySelectorAll('.app-switcher-entry:not(.is-leaving)')) {
+    if (reduceMotion) {
+      previousEntry.remove();
+    } else {
+      previousEntry.classList.add('is-leaving');
+      previousEntry.addEventListener('animationend', () => previousEntry.remove(), { once: true });
+    }
+  }
+  if (!reduceMotion) {
+    entry.classList.add('is-entering');
+  }
+  appSwitcherTrack.append(entry);
 }
 
-function setAppsControlsOpen(isOpen, resizeWindow = true) {
-  if (isOpen) {
-    pill.classList.remove('apps-closing', 'apps-content-ready');
-    pill.classList.add('apps-open');
-    appsControls.classList.add('is-open');
-    appsControls.setAttribute('aria-hidden', 'false');
-    appsControls.inert = false;
-    appsToggle.setAttribute('aria-expanded', 'true');
-    if (resizeWindow) {
-      window.pillApp.setAppsOpen(true);
-    }
-    waitForPillTransition().then(() => {
-      if (pill.classList.contains('apps-open')) {
-        pill.classList.add('apps-content-ready');
-      }
-    });
-    clearInterval(runningRefreshTimer);
-    refreshRunningApps();
-    runningRefreshTimer = setInterval(refreshRunningApps, 5000);
-  } else {
-    pill.classList.remove('apps-open');
-    pill.classList.add('apps-closing');
-    appsControls.setAttribute('aria-hidden', 'true');
-    appsControls.inert = true;
-    appsToggle.setAttribute('aria-expanded', 'false');
-    clearInterval(runningRefreshTimer);
-    runningRefreshTimer = undefined;
+function stepAppSwitcher() {
+  if (!appSwitcherOpen) {
+    openAppSwitcher();
+    return;
+  }
 
-    waitForPillTransition().then(() => {
-      if (pill.classList.contains('apps-closing') && expanded) {
-        finishAppsClosing();
-        if (resizeWindow && !pill.classList.contains('music-open')) {
-          window.pillApp.setAppsOpen(false);
-        }
+  appSwitcherSteps += 1;
+  if (appSwitcherWindows && appSwitcherWindows.length > 1) {
+    appSwitcherIndex = (appSwitcherIndex + 1) % appSwitcherWindows.length;
+    showAppSwitcherSelection();
+  }
+}
+
+async function openAppSwitcher() {
+  if (notificationOpen || animating || opening) {
+    return;
+  }
+
+  const requestId = ++appSwitcherRequestId;
+  appSwitcherOpen = true;
+  appSwitcherWindows = undefined;
+  appSwitcherSteps = 1;
+  appSwitcherCommitRequested = false;
+  const windowsLoad = window.pillApp.getOpenWindows();
+  window.pillApp.setInteractive(true);
+
+  if (settingsOpen) {
+    await closePillSettings(false, true);
+    if (requestId !== appSwitcherRequestId) {
+      return;
+    }
+    if (settingsOpen) {
+      appSwitcherOpen = false;
+      return;
+    }
+  }
+  // Taller panels must finish shrinking before the window does, or the pill gets clipped.
+  const shrinking = appsOpen
+    || pill.classList.contains('apps-closing')
+    || pill.classList.contains('music-open');
+  if (appsOpen) {
+    setAppsPanelOpen(false, false);
+  }
+  if (pill.classList.contains('music-open')) {
+    setMusicControlsOpen(false, false);
+  }
+  finishVolumeAdjustment();
+  keyboardPinned = true;
+
+  const showAppSwitcher = () => {
+    expanded = true;
+    pill.setAttribute('aria-expanded', 'true');
+    pill.classList.add('app-switcher-open');
+    appSwitcher.setAttribute('aria-hidden', 'false');
+    appSwitcher.inert = false;
+  };
+  opening = true;
+  try {
+    if (shrinking) {
+      showAppSwitcher();
+      await waitForPillTransition();
+      if (requestId !== appSwitcherRequestId) {
+        return;
       }
+    }
+    await window.pillApp.setAppSwitcherOpen(true);
+  } catch (error) {
+    console.error('Failed to open the app switcher:', error);
+  } finally {
+    opening = false;
+  }
+  if (requestId !== appSwitcherRequestId) {
+    return;
+  }
+  showAppSwitcher();
+
+  let windows;
+  try {
+    windows = await windowsLoad;
+  } catch (error) {
+    console.error('Failed to load open apps:', error);
+    windows = [];
+  }
+  if (requestId !== appSwitcherRequestId) {
+    return;
+  }
+  appSwitcherWindows = windows;
+  appSwitcherIndex = windows.length > 0 ? appSwitcherSteps % windows.length : 0;
+  showAppSwitcherSelection();
+  if (appSwitcherCommitRequested) {
+    closeAppSwitcher(true);
+  }
+}
+
+async function closeAppSwitcher(commit) {
+  if (!appSwitcherOpen) {
+    return;
+  }
+  if (commit && !appSwitcherWindows) {
+    appSwitcherCommitRequested = true;
+    return;
+  }
+
+  // Cancelling returns to the app that was active before the pill took focus.
+  const selected = appSwitcherWindows
+    ? appSwitcherWindows[commit ? appSwitcherIndex : 0]
+    : undefined;
+  const requestId = ++appSwitcherRequestId;
+  appSwitcherOpen = false;
+  appSwitcherWindows = undefined;
+  keyboardPinned = false;
+  appSwitcher.setAttribute('aria-hidden', 'true');
+  appSwitcher.inert = true;
+  if (selected) {
+    window.pillApp.activateWindow(selected.hwnd).catch((error) => {
+      console.error('Failed to switch to the selected app:', error);
     });
+  }
+
+  const stayExpanded = pill.matches(':hover');
+  if (!stayExpanded) {
+    expanded = false;
+    pill.setAttribute('aria-expanded', 'false');
+  }
+  pill.classList.remove('app-switcher-open');
+  await waitForPillTransition();
+  if (requestId !== appSwitcherRequestId) {
+    return;
+  }
+  appSwitcherTrack.replaceChildren();
+  try {
+    if (stayExpanded) {
+      await window.pillApp.setAppSwitcherOpen(false);
+    } else {
+      await window.pillApp.setExpanded(false);
+    }
+  } catch (error) {
+    console.error('Failed to close the app switcher:', error);
+  }
+  if (!notificationOpen && notificationQueue.length > 0) {
+    showNextNotification();
+  }
+}
+
+async function openAppsFromShortcut() {
+  if (notificationOpen || animating || opening || appSwitcherOpen) {
+    return;
+  }
+
+  if (appsOpen) {
+    if (pill.matches(':hover')) {
+      setAppsPanelOpen(false);
+    } else {
+      collapsePill();
+    }
+    return;
+  }
+
+  window.pillApp.setInteractive(true);
+
+  if (settingsOpen) {
+    await closePillSettings(false, true);
+    if (settingsOpen) {
+      return;
+    }
+  }
+
+  keyboardPinned = !pill.matches(':hover');
+  if (!expanded) {
+    await expandPill(true);
+  }
+  if (!expanded || animating || opening) {
+    keyboardPinned = false;
+    return;
+  }
+
+  await setAppsPanelOpen(true);
+  if (appsOpen) {
+    appsSearch.focus();
+  } else {
+    keyboardPinned = false;
   }
 }
 
 async function collapsePill() {
-  if (!expanded || animating || keyboardSelectionActive) {
+  if (appSwitcherOpen) {
+    await closeAppSwitcher(false);
     return;
   }
+  if (!expanded || animating) {
+    return;
+  }
+  keyboardPinned = false;
 
   if (settingsOpen) {
     await closePillSettings(true);
     return;
+  }
+
+  if (appsOpen) {
+    setAppsPanelOpen(false, false);
   }
 
   animating = true;
@@ -934,17 +889,11 @@ async function collapsePill() {
   if (pill.classList.contains('music-open')) {
     pill.classList.add('music-closing');
   }
-  if (appsControls.classList.contains('is-open')) {
-    setAppsControlsOpen(false, false);
-  }
   if (pill.classList.contains('music-open')) {
     setMusicControlsOpen(false, false);
   }
   setVolumeControlsOpen(false);
   await waitForPillTransition();
-  if (pill.classList.contains('apps-closing')) {
-    finishAppsClosing();
-  }
   pill.classList.remove('music-closing');
   try {
     await window.pillApp.setExpanded(false);
@@ -955,7 +904,7 @@ async function collapsePill() {
   }
 }
 
-async function closePillSettings(collapse = false) {
+async function closePillSettings(collapse = false, keepOpen = false) {
   if (!settingsOpen || animating || opening) {
     return;
   }
@@ -1004,18 +953,15 @@ async function openPillSettings() {
     return;
   }
 
-  if (notificationOpen || keyboardSelectionActive || animating || opening) {
+  if (notificationOpen || animating || opening || appSwitcherOpen) {
     return;
   }
 
-  keyboardPinned = false;
-  const switchingFromApps = appsControls.classList.contains('is-open');
-  if (switchingFromApps) {
-    setAppsControlsOpen(false, false);
-    finishAppsClosing();
-  }
   if (pill.classList.contains('music-open')) {
     setMusicControlsOpen(false, false);
+  }
+  if (appsOpen) {
+    await setAppsPanelOpen(false);
   }
   finishVolumeAdjustment();
 
@@ -1027,41 +973,19 @@ async function openPillSettings() {
   pill.classList.add('settings-open', 'settings-switching-out', 'settings-entering');
   pillSettingsMenu.setAttribute('aria-hidden', 'true');
   pillSettingsMenu.inert = true;
-  if (!switchingFromApps) {
-    try {
-      await window.pillApp.setSettingsOpen(true);
-    } catch (error) {
-      opening = false;
-      settingsOpen = false;
-      expanded = false;
-      pill.setAttribute('aria-expanded', 'false');
-      pill.classList.remove('settings-open', 'settings-switching-out', 'settings-entering');
-      console.error('Failed to open the pill elements menu:', error);
-      return;
-    }
+  try {
+    await window.pillApp.setSettingsOpen(true);
+  } catch (error) {
+    opening = false;
+    settingsOpen = false;
+    expanded = false;
+    pill.setAttribute('aria-expanded', 'false');
+    pill.classList.remove('settings-open', 'settings-switching-out', 'settings-entering');
+    console.error('Failed to open the pill elements menu:', error);
+    return;
   }
 
   await waitForPillTransition();
-  if (switchingFromApps) {
-    try {
-      await window.pillApp.setSettingsOpen(true);
-    } catch (error) {
-      opening = false;
-      settingsOpen = false;
-      expanded = false;
-      pill.setAttribute('aria-expanded', 'false');
-      pill.classList.remove('settings-open', 'settings-switching-out', 'settings-entering');
-      pillSettingsMenu.inert = true;
-      try {
-        await window.pillApp.setExpanded(false);
-      } catch (resizeError) {
-        console.error('Failed to restore the collapsed pill after opening settings failed:', resizeError);
-      }
-      console.error('Failed to open the pill elements menu:', error);
-      return;
-    }
-  }
-
   pill.classList.remove('settings-switching-out');
   pillSettingsMenu.setAttribute('aria-hidden', 'false');
   pillSettingsMenu.inert = false;
@@ -1070,12 +994,12 @@ async function openPillSettings() {
   });
   opening = false;
   window.pillApp.setInteractive(true);
-  if (!pill.matches(':hover')) {
+  if (!keepOpen && !pill.matches(':hover')) {
     collapsePill();
   }
 }
 
-async function expandPill() {
+async function expandPill(keepOpen = false) {
   if (animating || opening || expanded) {
     return;
   }
@@ -1093,34 +1017,27 @@ async function expandPill() {
   await waitForPillTransition();
   opening = false;
 
-  if (expanded && !pill.matches(':hover')) {
+  if (!keepOpen && expanded && !pill.matches(':hover')) {
     collapsePill();
   }
 }
 
 pill.addEventListener('mouseenter', () => {
-  keyboardPinned = false;
   if (notificationOpen) {
     return;
   }
+  keyboardPinned = false;
   if (!expanded) {
     window.pillApp.setInteractive(true);
   }
 });
 
 pill.addEventListener('mouseleave', () => {
-  if (notificationOpen) {
-    return;
-  }
-  if (keyboardSelectionActive) {
-    return;
-  }
-  if (keyboardPinned) {
-    keyboardPinned = false;
+  if (notificationOpen || appSwitcherOpen) {
     return;
   }
   if (expanded) {
-    if (!opening) {
+    if (!opening && !keyboardPinned) {
       collapsePill();
     }
   } else {
@@ -1139,7 +1056,6 @@ pill.addEventListener('click', (event) => {
   }
 
   if (expanded) {
-    keyboardPinned = false;
     collapsePill();
   } else {
     expandPill();
@@ -1162,18 +1078,23 @@ pillSettingsMenu.addEventListener('click', (event) => {
     return;
   }
 
-  if (key === 'apps' && appsControls.classList.contains('is-open')) {
-    setAppsControlsOpen(false, false);
-    finishAppsClosing();
-  } else if (key === 'music' && pill.classList.contains('music-open')) {
+  if (key === 'music' && pill.classList.contains('music-open')) {
     setMusicControlsOpen(false, false);
+  } else if (key === 'apps' && appsOpen) {
+    setAppsPanelOpen(false);
   } else if (key === 'volume' && pill.classList.contains('volume-adjusting')) {
     finishVolumeAdjustment();
   }
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && settingsOpen) {
+  if (appSwitcherOpen && (event.key === 'Escape' || event.key === 'Enter')) {
+    event.preventDefault();
+    closeAppSwitcher(event.key === 'Enter');
+  } else if (event.key === 'Escape' && settingsOpen) {
+    event.preventDefault();
+    collapsePill();
+  } else if (event.key === 'Escape' && appsOpen) {
     event.preventDefault();
     collapsePill();
   }
@@ -1189,48 +1110,25 @@ pill.addEventListener('click', (event) => {
   }
 });
 
-appsToggle.addEventListener('click', async () => {
-  const isOpen = appsToggle.getAttribute('aria-expanded') !== 'true';
-  if (pill.classList.contains('music-open')) {
-    setMusicControlsOpen(false, false);
-  }
-  setVolumeControlsOpen(false);
-  setAppsControlsOpen(isOpen);
-  if (!isOpen) {
+musicToggle.addEventListener('click', async () => {
+  const isOpen = musicToggle.getAttribute('aria-expanded') !== 'true';
+  if (isOpen && (appsOpen || pill.classList.contains('apps-closing'))) {
+    switchAppsToMusic();
     return;
   }
-
-  appsStatus.textContent = 'Loading apps...';
-  appsSearch.value = '';
-  appsSearch.focus();
-  try {
-    installedApps = await window.pillApp.getApps();
-    if (appsControls.classList.contains('is-open')) {
-      renderApps();
-    }
-  } catch (error) {
-    appsStatus.textContent = 'Could not load installed apps.';
-    console.error('Failed to load installed apps:', error);
-  }
-});
-appsSearch.addEventListener('input', renderApps);
-appsSearch.addEventListener('input', renderApps);
-
-musicToggle.addEventListener('click', () => {
-  const isOpen = musicToggle.getAttribute('aria-expanded') !== 'true';
-  const switchingFromApps = appsControls.classList.contains('is-open');
-  if (switchingFromApps) {
-    setAppsControlsOpen(false, false);
-    finishAppsClosing();
+  if (appsOpen) {
+    await setAppsPanelOpen(false, false);
   }
   setVolumeControlsOpen(false);
-  setMusicControlsOpen(isOpen, !switchingFromApps);
-  if (isOpen && switchingFromApps) {
-    waitForPillTransition().then(() => {
-      if (pill.classList.contains('music-open')) {
-        window.pillApp.setMusicOpen(true);
-      }
-    });
+  setMusicControlsOpen(isOpen);
+});
+
+appsToggle.addEventListener('click', () => setAppsPanelOpen(!appsOpen));
+appsSearch.addEventListener('input', renderLaunchableApps);
+appsList.addEventListener('click', (event) => {
+  const button = event.target.closest('.app-launch-button');
+  if (button) {
+    launchSelectedApp(button);
   }
 });
 
@@ -1240,8 +1138,8 @@ musicNext.addEventListener('click', () => controlMusic('next'));
 
 volumeToggle.addEventListener('click', async () => {
   const isOpen = !pill.classList.contains('volume-adjusting');
-  if (appsControls.classList.contains('is-open')) {
-    setAppsControlsOpen(false);
+  if (appsOpen) {
+    setAppsPanelOpen(false);
   }
   if (pill.classList.contains('music-open')) {
     setMusicControlsOpen(false);

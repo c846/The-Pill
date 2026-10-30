@@ -2,7 +2,7 @@
 ### Version 1.0.0  
 
 #### Description  
-The Pill is a good-looking replacement for the old, boring, glitchy Windows taskbar, as well as other Window's navigation features, such as switching between apps.  
+The Pill is a compact desktop overlay for Windows, providing quick access to system volume, music controls, launchable apps, notifications, date, and time.
 
 The Pill sits at the top of the screen and may be clicked to open it up. You can also right click it to open up the Pill's settings.  
 
@@ -12,10 +12,9 @@ The Pill sits at the top of the screen and may be clicked to open it up. You can
 <img width="452" height="407" alt="Screenshot 2026-10-29 113818" src="https://github.com/user-attachments/assets/16e9c144-f12a-4e86-a77f-cc9e8255aa2e" />
 
 #### How do I use the Pill?  
-Many of the features of the Pill are self-explanatory, however there are some keyboard shortcuts that are useful for those who are impatient:  
-* **alt + shift + q:** Allows you to cycle through currently opened apps.
-* **alt + shift + w:** Toggles the visibility of the Pill. The Pill can still be interacted with and is in the same location.
-* **alt + space:** Opens up the app search so that you can quickly search for and launch apps.
+The **alt + shift + w** keyboard shortcut toggles the visibility of the Pill. It can still be interacted with and remains in the same location.
+
+The **alt + shift + q** keyboard shortcut opens the app switcher. Keep holding alt + shift and press **q** to cycle through your open apps, then release alt to switch to the selected one. Press **esc** to cancel.
 
 #### The state of the Pill!  
 The Pill is still relatively rudimentary, but I will most likely add new features unless I don't feel like it later down the line. Most of the bugs are probably ironed out.

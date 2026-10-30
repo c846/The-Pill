@@ -4,23 +4,21 @@ contextBridge.exposeInMainWorld('pillApp', {
   setInteractive: (interactive) => ipcRenderer.send('pill:set-interactive', interactive),
   setExpanded: (expanded) => ipcRenderer.invoke('pill:set-expanded', expanded),
   setSettingsOpen: (isOpen) => ipcRenderer.invoke('pill:set-settings-open', isOpen),
-  focusWindow: () => ipcRenderer.invoke('pill:focus-window'),
-  setAppsOpen: (isOpen) => ipcRenderer.send('pill:set-apps-open', isOpen),
+  setAppsOpen: (isOpen) => ipcRenderer.invoke('pill:set-apps-open', isOpen),
   setMusicOpen: (isOpen) => ipcRenderer.send('pill:set-music-open', isOpen),
   getVolume: () => ipcRenderer.invoke('pill:get-volume'),
   setVolume: (volume) => ipcRenderer.invoke('pill:set-volume', volume),
   getBatteryStatus: () => ipcRenderer.invoke('pill:get-battery-status'),
+  getLaunchableApps: () => ipcRenderer.invoke('pill:get-launchable-apps'),
+  launchApp: (appId) => ipcRenderer.invoke('pill:launch-app', appId),
+  setAppSwitcherOpen: (isOpen) => ipcRenderer.invoke('pill:set-app-switcher-open', isOpen),
+  getOpenWindows: () => ipcRenderer.invoke('pill:get-open-windows'),
+  activateWindow: (hwnd) => ipcRenderer.invoke('pill:activate-window', hwnd),
   onBatteryPowerSource: (callback) => {
     const listener = (_event, isOnAc) => callback(isOnAc);
     ipcRenderer.on('pill:battery-power-source', listener);
     return () => ipcRenderer.removeListener('pill:battery-power-source', listener);
   },
-  getApps: () => ipcRenderer.invoke('pill:get-apps'),
-  launchApp: (id) => ipcRenderer.invoke('pill:launch-app', id),
-  getRunningWindows: () => ipcRenderer.invoke('pill:get-running-windows'),
-  toggleRunningWindow: (id) => ipcRenderer.invoke('pill:toggle-running-window', id),
-  activateRunningWindow: (id) => ipcRenderer.invoke('pill:activate-running-window', id),
-  endRunningAppSelection: () => ipcRenderer.send('pill:running-selection-ended'),
   onShortcut: (callback) => {
     const listener = (_event, action, data) => callback(action, data);
     ipcRenderer.on('pill:shortcut', listener);

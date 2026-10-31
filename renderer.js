@@ -60,6 +60,8 @@ let appSwitcherIndex = 0;
 let appSwitcherSteps = 0;
 let appSwitcherCommitRequested = false;
 let appSwitcherRequestId = 0;
+let volumeKeyTimer;
+let volumeSliderAnimation;
 
 const pillOptionTargets = new Map([
   ['volume', volumeToggle],
@@ -640,8 +642,68 @@ function finishVolumeAdjustment() {
   volumeSlider.disabled = true;
 }
 
-window.pillApp.onShortcut((action) => {
-  if (action === 'toggle-idle-visibility') {
+function animateVolumeSlider(target) {
+  cancelAnimationFrame(volumeSliderAnimation);
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    volumeSlider.value = String(target);
+    return;
+  }
+
+  // Retargeting from the current position keeps held keys gliding instead of restarting.
+  const start = Number(volumeSlider.value);
+  const startTime = performance.now();
+  const duration = 180;
+  const frame = (now) => {
+    const progress = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - (1 - progress) ** 3;
+    volumeSlider.value = String(start + (target - start) * eased);
+    if (progress < 1) {
+      volumeSliderAnimation = requestAnimationFrame(frame);
+    }
+  };
+  volumeSliderAnimation = requestAnimationFrame(frame);
+}
+
+async function showVolumeFromKey({ volume, muted }) {
+  const displayedVolume = muted ? 0 : volume;
+  animateVolumeSlider(displayedVolume);
+  volumeValue.value = `${displayedVolume}%`;
+  volumeError.textContent = '';
+
+  if (notificationOpen || settingsOpen || appsOpen || appSwitcherOpen) {
+    return;
+  }
+
+  clearTimeout(volumeKeyTimer);
+  if (!expanded) {
+    await expandPill(true);
+    if (!expanded) {
+      return;
+    }
+  }
+  if (pill.classList.contains('music-open')) {
+    setMusicControlsOpen(false);
+  }
+  setVolumeControlsOpen(true);
+  volumeSlider.disabled = false;
+
+  clearTimeout(volumeKeyTimer);
+  volumeKeyTimer = setTimeout(() => {
+    if (
+      expanded
+      && !keyboardPinned
+      && !pill.matches(':hover')
+      && pill.classList.contains('volume-adjusting')
+    ) {
+      collapsePill();
+    }
+  }, 1500);
+}
+
+window.pillApp.onShortcut((action, data) => {
+  if (action === 'volume-key') {
+    showVolumeFromKey(data);
+  } else if (action === 'toggle-idle-visibility') {
     pill.classList.toggle('idle-transparent');
   } else if (action === 'open-apps-search') {
     openAppsFromShortcut();
@@ -1159,6 +1221,7 @@ volumeToggle.addEventListener('click', async () => {
       return;
     }
 
+    cancelAnimationFrame(volumeSliderAnimation);
     volumeSlider.value = String(volume);
     volumeValue.value = `${volume}%`;
     volumeSlider.disabled = false;
@@ -1172,7 +1235,8 @@ volumeToggle.addEventListener('click', async () => {
 });
 
 volumeSlider.addEventListener('input', async () => {
-  const volume = Number(volumeSlider.value);
+  cancelAnimationFrame(volumeSliderAnimation);
+  const volume = Math.round(Number(volumeSlider.value));
   volumeValue.value = `${volume}%`;
   volumeError.textContent = '';
 

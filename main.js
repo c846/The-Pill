@@ -28,6 +28,12 @@ let launchableAppsLoad;
 let windowHelper;
 let listedWindowHandles = new Set();
 let watchingAppSwitcherRelease = false;
+const volumeKeyStep = 2;
+let volumeKeyState;
+let volumeKeyStateRead;
+let volumeKeyUsedAt = 0;
+let volumeKeyWritten;
+let volumeKeyWriting = false;
 
 function runPowerShell(script) {
   const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
@@ -909,6 +915,7 @@ function createWindow() {
       throw new Error('Invalid volume request');
     }
 
+    volumeKeyState = undefined;
     return loudness.setVolume(volume);
   });
 
@@ -963,7 +970,87 @@ function createWindow() {
   })) {
     console.error('Could not register the Alt+Shift+Q shortcut.');
   }
+
+  // Registering the volume keys keeps them from Windows, which hides its volume flyout.
+  async function pressVolumeKey(action) {
+    let state;
+    try {
+      state = await readVolumeKeyState();
+    } catch (error) {
+      console.error('Failed to read system volume:', error);
+      return;
+    }
+
+    volumeKeyUsedAt = Date.now();
+    if (action === 'mute') {
+      state.muted = !state.muted;
+    } else {
+      const step = action === 'up' ? volumeKeyStep : -volumeKeyStep;
+      state.volume = Math.min(100, Math.max(0, state.volume + step));
+      state.muted = false;
+    }
+    sendShortcut('volume-key', { volume: state.volume, muted: state.muted });
+    writeVolumeKeyState();
+  }
+  for (const [accelerator, action] of [
+    ['VolumeUp', 'up'],
+    ['VolumeDown', 'down'],
+    ['VolumeMute', 'mute'],
+  ]) {
+    if (!globalShortcut.register(accelerator, () => pressVolumeKey(action))) {
+      console.error(`Could not register the ${accelerator} key.`);
+    }
+  }
   return window;
+}
+
+function readVolumeKeyState() {
+  // Volume can change outside the pill, so reread it once the keys go idle.
+  if (volumeKeyState && Date.now() - volumeKeyUsedAt < 2000) {
+    return Promise.resolve(volumeKeyState);
+  }
+  if (!volumeKeyStateRead) {
+    volumeKeyStateRead = Promise.all([loudness.getVolume(), loudness.getMuted()])
+      .then(([volume, muted]) => {
+        volumeKeyState = { volume, muted };
+        volumeKeyWritten = { volume, muted };
+        return volumeKeyState;
+      })
+      .finally(() => {
+        volumeKeyStateRead = undefined;
+      });
+  }
+  return volumeKeyStateRead;
+}
+
+async function writeVolumeKeyState() {
+  if (volumeKeyWriting) {
+    return;
+  }
+
+  // Held keys repeat faster than the volume helper runs, so only the latest level is written.
+  volumeKeyWriting = true;
+  try {
+    while (
+      volumeKeyState
+      && (volumeKeyState.volume !== volumeKeyWritten.volume
+        || volumeKeyState.muted !== volumeKeyWritten.muted)
+    ) {
+      const { volume, muted } = volumeKeyState;
+      if (muted !== volumeKeyWritten.muted) {
+        await loudness.setMuted(muted);
+      }
+      if (volume !== volumeKeyWritten.volume) {
+        await loudness.setVolume(volume);
+      }
+      volumeKeyWritten = { volume, muted };
+    }
+  } catch (error) {
+    volumeKeyState = undefined;
+    console.error('Failed to set system volume:', error);
+  } finally {
+    volumeKeyWriting = false;
+  }
 }
 
 function startNotificationListener(window) {

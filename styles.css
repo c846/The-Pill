@@ -56,6 +56,10 @@
   --pane-fg-soft: rgba(0, 0, 0, 0.6);
   --pane-knob: #262626;
   --pane-knob-contrast: #fff;
+  --pane-icon-light: none;
+  --pane-icon-dark: block;
+  --icon-light: block;
+  --icon-dark: none;
   --knob: #fff;
   --knob-contrast: #262626;
   --knob-track: rgba(255, 255, 255, 0.35);
@@ -82,6 +86,10 @@
   --pane-fg-soft: rgba(255, 255, 255, 0.65);
   --pane-knob: #fff;
   --pane-knob-contrast: #262626;
+  --pane-icon-light: block;
+  --pane-icon-dark: none;
+  --icon-light: none;
+  --icon-dark: block;
   --knob: #262626;
   --knob-contrast: #fff;
   --knob-track: rgba(38, 38, 38, 0.35);
@@ -300,7 +308,7 @@ input::placeholder {
   display: none;
 }
 
-/* ---------- Top bar: buttons on the left, date, time and battery on the right ---------- */
+/* ---------- Top bar: buttons on the left; date, time, weather and battery on the right ---------- */
 
 .pill-actions {
   display: flex;
@@ -359,22 +367,44 @@ input::placeholder {
   font-size: 12px;
 }
 
-/* The state words vary in length, so the weather button sizes to its text. */
-.pill-actions button.weather-toggle {
+/* The weather button sits between the time and battery and sizes to its icon, or its word before the forecast loads. */
+.pill-datetime .weather-toggle {
   flex: 0 0 auto;
-  width: auto;
-  min-width: 44px;
+  height: 28px;
+  min-width: 36px;
+  padding: 0 8px;
   white-space: nowrap;
-}
-
-.weather-toggle[data-weather-state="danger"] {
-  font-weight: 600;
 }
 
 .apps-toggle {
   order: -1;
   justify-content: center;
   font-size: 12px;
+}
+
+/*
+  Icons from pill-icons come in a white "Light" copy and a black "Dark" copy. Only the one matching
+  --pill-fg shows: --icon-light and --icon-dark are set by the theme and flipped on panes.
+*/
+.pill-icon {
+  width: 20px;
+  height: 20px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.pill-icon-light {
+  display: var(--icon-light);
+}
+
+.pill-icon-dark {
+  display: var(--icon-dark);
+}
+
+/* The weather toggle shows its word until there is a forecast to pick an icon for. */
+.weather-toggle:not([data-weather-state]) .pill-icon,
+.weather-toggle[data-weather-state] .weather-toggle-label {
+  display: none;
 }
 
 .volume-toggle:focus-visible,
@@ -421,10 +451,10 @@ input::placeholder {
   border: 0;
 }
 
-.pill-actions button.pill-option-disabled.weather-toggle {
-  flex: 0 0 0;
-  width: 0;
+.pill-datetime .weather-toggle.pill-option-disabled {
   min-width: 0;
+  padding: 0;
+  border: 0;
 }
 
 .pill-actions button.pill-option-disabled.apps-toggle {
@@ -878,8 +908,12 @@ input::placeholder {
 }
 
 .music-artwork-placeholder {
-  color: var(--pill-fg-soft);
-  font-size: 14px;
+  opacity: 0.6;
+}
+
+.music-artwork-placeholder .pill-icon {
+  width: 40px;
+  height: 40px;
 }
 
 .music-artwork-placeholder[hidden],
@@ -948,11 +982,12 @@ input::placeholder {
 }
 
 .music-action-label {
-  display: inline-block;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: pre;
+  display: inline-flex;
+}
+
+.music-play-pause .pill-icon {
+  width: 22px;
+  height: 22px;
 }
 
 .music-actions .music-play-pause {
@@ -1337,11 +1372,30 @@ input::placeholder {
   font-size: 10px;
 }
 
-/* Each dot sits higher for warmer hours, which traces the temperature across the strip. */
+/* Each hour's weather icon sits higher for warmer hours, which traces the temperature across the strip.
+   An hour with no recognized weather gets a plain dot instead. */
 .weather-hour-graph {
   position: relative;
   width: 100%;
-  height: 20px;
+  height: 34px;
+}
+
+.weather-hour-icon {
+  position: absolute;
+  bottom: calc(var(--level, 0) * 12px);
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  margin-left: -11px;
+}
+
+.weather-hour-icon .pill-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.weather-hour-icon[hidden] {
+  display: none;
 }
 
 .weather-hour-dot {
@@ -1492,10 +1546,10 @@ input::placeholder {
   position: absolute;
   z-index: 2;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   width: max-content;
-  max-width: 220px;
-  gap: 2px;
+  max-width: 260px;
+  gap: 10px;
   padding: 8px 12px;
   border-radius: 14px;
   background: var(--popover);
@@ -1503,6 +1557,18 @@ input::placeholder {
   font-size: 11px;
   line-height: 1.3;
   pointer-events: none;
+}
+
+.weather-bubble-icon .pill-icon {
+  width: 36px;
+  height: 36px;
+}
+
+.weather-bubble-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
 }
 
 .weather-bubble-title {
@@ -1611,6 +1677,8 @@ input::placeholder {
   --pill-fg-soft: var(--pane-fg-soft);
   --knob: var(--pane-knob);
   --knob-contrast: var(--pane-knob-contrast);
+  --icon-light: var(--pane-icon-light);
+  --icon-dark: var(--pane-icon-dark);
   color: var(--pill-fg);
   text-shadow: none;
 }
@@ -1744,6 +1812,7 @@ input::placeholder {
     min-width var(--flow-time) var(--ease-flow),
     height var(--flow-time) var(--ease-flow),
     padding var(--flow-time) var(--ease-flow),
+    max-width var(--flow-time) var(--ease-flow),
     opacity 260ms var(--ease-smoke),
     visibility 260ms;
 }
@@ -1755,8 +1824,8 @@ input::placeholder {
   scale: 0.92;
 }
 
-/* Options turned off in Pill Settings drain away instead of vanishing. */
-.pill-datetime > * {
+/* Options turned off in Pill Settings drain away instead of vanishing. The weather button has its own transitions above. */
+.pill-datetime > :not(.weather-toggle) {
   transition:
     max-width var(--flow-time) var(--ease-flow),
     opacity 260ms var(--ease-smoke),
@@ -2105,12 +2174,17 @@ input::placeholder {
 }
 
 .weather-hour-dot,
+.weather-hour-icon,
 .weather-week-dot {
   transition: scale var(--pop-time) var(--ease-pop);
 }
 
 .weather-hour:hover .weather-hour-dot {
   scale: 1.5;
+}
+
+.weather-hour:hover .weather-hour-icon {
+  scale: 1.2;
 }
 
 /* The week's line pours across the chart, and each day drops in behind it. */

@@ -65,16 +65,16 @@
         </section>
         <div class="pill-actions">
           <button class="volume-toggle" type="button" aria-label="Volume" aria-expanded="false" aria-controls="volume-controls">
-            Vol
+            <img class="pill-icon pill-icon-light" src="pill-icons/Volume Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Volume Dark.png" alt="" draggable="false" />
           </button>
           <button class="music-toggle" type="button" aria-label="Music" aria-expanded="false" aria-controls="music-controls">
-            Music
-          </button>
-          <button class="weather-toggle" type="button" aria-label="Weather" aria-expanded="false" aria-controls="weather-panel">
-            Weather
+            <img class="pill-icon pill-icon-light" src="pill-icons/Music Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Music Dark.png" alt="" draggable="false" />
           </button>
           <button class="apps-toggle" type="button" aria-label="Apps" aria-expanded="false" aria-controls="apps-panel">
-            Apps
+            <img class="pill-icon pill-icon-light" src="pill-icons/Apps Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Apps Dark.png" alt="" draggable="false" />
           </button>
         </div>
         <div class="volume-controls" id="volume-controls" aria-hidden="true" inert>
@@ -85,7 +85,10 @@
         <section class="music-controls" id="music-controls" aria-hidden="true" inert aria-label="Music player">
           <div class="music-artwork-wrap">
             <img class="music-artwork" alt="" />
-            <span class="music-artwork-placeholder" aria-hidden="true">Music</span>
+            <span class="music-artwork-placeholder" aria-hidden="true">
+              <img class="pill-icon pill-icon-light" src="pill-icons/Music Light.png" alt="" draggable="false" />
+              <img class="pill-icon pill-icon-dark" src="pill-icons/Music Dark.png" alt="" draggable="false" />
+            </span>
           </div>
           <div class="music-details">
             <span class="music-title">Nothing playing</span>
@@ -94,13 +97,22 @@
             <span class="music-status" role="status" aria-live="polite">Finds music playing in Windows apps.</span>
             <div class="music-actions">
               <button class="music-previous" type="button" aria-label="Previous track" disabled>
-                <span class="music-action-label" aria-hidden="true">&lt;|</span>
+                <span class="music-action-label" aria-hidden="true">
+                  <img class="pill-icon pill-icon-light" src="pill-icons/Previous Light.png" alt="" draggable="false" />
+                  <img class="pill-icon pill-icon-dark" src="pill-icons/Previous Dark.png" alt="" draggable="false" />
+                </span>
               </button>
               <button class="music-play-pause" type="button" aria-label="Play or pause" disabled>
-                <span class="music-action-label music-play-pause-icon" aria-hidden="true">&gt;</span>
+                <span class="music-action-label music-play-pause-icon" aria-hidden="true" data-icon="Play">
+                  <img class="pill-icon pill-icon-light" src="pill-icons/Play Light.png" alt="" draggable="false" />
+                  <img class="pill-icon pill-icon-dark" src="pill-icons/Play Dark.png" alt="" draggable="false" />
+                </span>
               </button>
               <button class="music-next" type="button" aria-label="Next track" disabled>
-                <span class="music-action-label" aria-hidden="true">|&gt;</span>
+                <span class="music-action-label" aria-hidden="true">
+                  <img class="pill-icon pill-icon-light" src="pill-icons/Next Light.png" alt="" draggable="false" />
+                  <img class="pill-icon pill-icon-dark" src="pill-icons/Next Dark.png" alt="" draggable="false" />
+                </span>
               </button>
             </div>
           </div>
@@ -145,6 +157,11 @@
         <div class="pill-datetime">
           <time class="pill-date" aria-label="Current date"></time>
           <time class="pill-clock" aria-label="Current time"></time>
+          <button class="weather-toggle" type="button" aria-label="Weather" aria-expanded="false" aria-controls="weather-panel">
+            <img class="pill-icon pill-icon-light" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" alt="" draggable="false" />
+            <span class="weather-toggle-label">Weather</span>
+          </button>
           <span class="battery-percentage" aria-label="Battery charge" hidden></span>
         </div>
       </div>

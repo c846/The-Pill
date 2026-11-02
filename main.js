@@ -967,6 +967,7 @@ function buildWeatherHours(periods) {
     state: getWeatherState(period.icon, period.shortForecast),
     description: period.shortForecast || '',
     precipitation: getPrecipitation(period),
+    isDaytime: period.isDaytime !== false,
   }));
 }
 
@@ -1021,6 +1022,10 @@ function getCurrentWeather(observation, hours) {
     state: observedState || nextHour.state,
     description: (observedState && properties.textDescription) || (nextHour && nextHour.description) || '',
     temperature: observedTemperature !== null ? observedTemperature : nextHour && nextHour.temperature,
+    // Observation icon URLs read like .../icons/land/night/few, which tells day from night.
+    isDaytime: observedState && typeof properties.icon === 'string'
+      ? !properties.icon.includes('/night/')
+      : !nextHour || nextHour.isDaytime !== false,
   };
 }
 

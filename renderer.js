@@ -109,6 +109,48 @@ const weatherStateNames = {
   danger: 'Danger',
 };
 
+// Names of the weather toggle's icons in pill-icons; clear and cloudy have day and night versions.
+const weatherStateIcons = {
+  clear: ['Clear Day', 'Clear Night'],
+  cloudy: ['Cloudy Day', 'Cloudy Night'],
+  rainy: 'Rainy',
+  smoggy: 'Smoggy',
+  snowy: 'Snowy',
+  thunderstorm: 'Thunderstorm',
+  danger: 'Danger',
+};
+
+// Each icon in pill-icons has a white "Light" copy and a black "Dark" copy; styles.css shows the one that fits.
+function setPillIcon(container, name) {
+  if (container.dataset.icon === name) {
+    return false;
+  }
+  container.dataset.icon = name;
+  container.querySelector('.pill-icon-light').src = `pill-icons/${name} Light.png`;
+  container.querySelector('.pill-icon-dark').src = `pill-icons/${name} Dark.png`;
+  return true;
+}
+
+function createPillIcon(className, name) {
+  const container = document.createElement('span');
+  container.className = className;
+  container.setAttribute('aria-hidden', 'true');
+  for (const tone of ['light', 'dark']) {
+    const image = document.createElement('img');
+    image.className = `pill-icon pill-icon-${tone}`;
+    image.alt = '';
+    image.draggable = false;
+    container.append(image);
+  }
+  setPillIcon(container, name);
+  return container;
+}
+
+function getWeatherIconName(state, isDaytime) {
+  const icon = weatherStateIcons[state];
+  return Array.isArray(icon) ? icon[isDaytime === false ? 1 : 0] : icon;
+}
+
 const pillOptionTargets = new Map([
   ['volume', volumeToggle],
   ['music', musicToggle],
@@ -480,8 +522,15 @@ function renderWeatherHours(hours) {
     const graph = document.createElement('span');
     graph.className = 'weather-hour-graph';
     graph.setAttribute('aria-hidden', 'true');
-    const dot = document.createElement('span');
-    dot.className = 'weather-hour-dot';
+    // Older saves lack isDaytime, so those hours fall back to the clock.
+    const isDaytime = hour.isDaytime ?? (time.getHours() >= 6 && time.getHours() < 18);
+    const iconName = getWeatherIconName(hour.state, isDaytime);
+    const dot = iconName
+      ? createPillIcon('weather-hour-icon', iconName)
+      : document.createElement('span');
+    if (!iconName) {
+      dot.className = 'weather-hour-dot';
+    }
     if (Number.isFinite(hour.temperature)) {
       dot.style.setProperty('--level', String((hour.temperature - lowest) / range));
     } else {
@@ -545,7 +594,15 @@ function showWeatherDayBubble(button, day) {
     item.textContent = notice;
     return item;
   });
-  weatherDayBubble.replaceChildren(title, conditions, temperatures, precipitation, ...notices);
+  const details = document.createElement('span');
+  details.className = 'weather-bubble-details';
+  details.append(title, conditions, temperatures, precipitation, ...notices);
+  // A day that starts at night, like "Tonight", has no high and gets the night icon.
+  const iconName = getWeatherIconName(day.state, Number.isFinite(day.high));
+  weatherDayBubble.replaceChildren(
+    ...(iconName ? [createPillIcon('weather-bubble-icon', iconName)] : []),
+    details,
+  );
   weatherDayBubble.hidden = false;
 
   // Keeps the bubble inside the panel, above the dot when it fits and below it otherwise.
@@ -655,9 +712,9 @@ function renderWeather() {
   const current = report.current;
   const stateName = current ? weatherStateNames[current.state] : undefined;
 
-  weatherToggle.textContent = stateName || 'Weather';
   weatherToggle.setAttribute('aria-label', stateName ? `Weather: ${stateName}` : 'Weather');
-  if (current && current.state) {
+  if (stateName) {
+    setPillIcon(weatherToggle, getWeatherIconName(current.state, current.isDaytime));
     weatherToggle.dataset.weatherState = current.state;
   } else {
     delete weatherToggle.dataset.weatherState;
@@ -982,9 +1039,7 @@ function renderMusicSession(session) {
 }
 
 function updatePlayPauseButton(isPlaying) {
-  const playPauseLabel = isPlaying ? '| |' : '>';
-  if (musicPlayPauseIcon.textContent !== playPauseLabel) {
-    musicPlayPauseIcon.textContent = playPauseLabel;
+  if (setPillIcon(musicPlayPauseIcon, isPlaying ? 'Pause' : 'Play')) {
     musicPlayPauseIcon.classList.remove('is-changing');
     void musicPlayPauseIcon.offsetWidth;
     musicPlayPauseIcon.classList.add('is-changing');

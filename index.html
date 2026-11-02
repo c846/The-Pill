@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-backdrop="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -32,6 +32,19 @@
               <span class="pill-settings-indicator" aria-hidden="true"></span>
               <span>Music</span>
             </button>
+            <div class="pill-settings-row">
+              <button class="pill-settings-option" type="button" data-pill-option="weather" aria-pressed="true">
+                <span class="pill-settings-indicator" aria-hidden="true"></span>
+                <span>Weather</span>
+              </button>
+              <button class="weather-settings-change" type="button">Change zip</button>
+              <form class="weather-settings-form" novalidate hidden>
+                <span class="weather-settings-status" role="status" aria-live="polite"></span>
+                <input class="weather-settings-input" type="text" inputmode="numeric" maxlength="5" placeholder="Zip code" aria-label="Zip code" autocomplete="postal-code" />
+                <button class="weather-settings-save" type="submit">Save</button>
+                <button class="weather-settings-cancel" type="button">Cancel</button>
+              </form>
+            </div>
             <button class="pill-settings-option" type="button" data-pill-option="apps" aria-pressed="true">
               <span class="pill-settings-indicator" aria-hidden="true"></span>
               <span>Apps</span>
@@ -52,10 +65,13 @@
         </section>
         <div class="pill-actions">
           <button class="volume-toggle" type="button" aria-label="Volume" aria-expanded="false" aria-controls="volume-controls">
-            <img src="pillicons/volume.png" alt="" aria-hidden="true" />
+            Vol
           </button>
           <button class="music-toggle" type="button" aria-label="Music" aria-expanded="false" aria-controls="music-controls">
-            <img src="pillicons/music.png" alt="" aria-hidden="true" />
+            Music
+          </button>
+          <button class="weather-toggle" type="button" aria-label="Weather" aria-expanded="false" aria-controls="weather-panel">
+            Weather
           </button>
           <button class="apps-toggle" type="button" aria-label="Apps" aria-expanded="false" aria-controls="apps-panel">
             Apps
@@ -69,7 +85,7 @@
         <section class="music-controls" id="music-controls" aria-hidden="true" inert aria-label="Music player">
           <div class="music-artwork-wrap">
             <img class="music-artwork" alt="" />
-            <img class="music-artwork-placeholder" src="pillicons/music.png" alt="" aria-hidden="true" />
+            <span class="music-artwork-placeholder" aria-hidden="true">Music</span>
           </div>
           <div class="music-details">
             <span class="music-title">Nothing playing</span>
@@ -78,13 +94,13 @@
             <span class="music-status" role="status" aria-live="polite">Finds music playing in Windows apps.</span>
             <div class="music-actions">
               <button class="music-previous" type="button" aria-label="Previous track" disabled>
-                <img src="pillicons/back.png" alt="" aria-hidden="true" />
+                <span class="music-action-label" aria-hidden="true">&lt;|</span>
               </button>
               <button class="music-play-pause" type="button" aria-label="Play or pause" disabled>
-                <img class="music-play-pause-icon" src="pillicons/play.png" alt="" aria-hidden="true" />
+                <span class="music-action-label music-play-pause-icon" aria-hidden="true">&gt;</span>
               </button>
               <button class="music-next" type="button" aria-label="Next track" disabled>
-                <img src="pillicons/next.png" alt="" aria-hidden="true" />
+                <span class="music-action-label" aria-hidden="true">|&gt;</span>
               </button>
             </div>
           </div>
@@ -94,6 +110,34 @@
             <input class="apps-search" type="search" aria-label="Search apps" placeholder="Search apps" autocomplete="off" />
           </div>
           <div class="apps-list" role="list" aria-label="Available apps"></div>
+        </section>
+        <section class="weather-panel" id="weather-panel" aria-hidden="true" inert aria-label="Weather forecast">
+          <form class="weather-zip-form" novalidate>
+            <span class="weather-zip-prompt">Enter your zip code to get weather from weather.gov.</span>
+            <div class="weather-zip-row">
+              <input class="weather-zip-input" type="text" inputmode="numeric" maxlength="5" placeholder="Zip code" aria-label="Zip code" autocomplete="postal-code" />
+              <button class="weather-zip-save" type="submit">Save</button>
+            </div>
+            <span class="weather-zip-status" role="status" aria-live="polite"></span>
+          </form>
+          <div class="weather-current">
+            <div class="weather-now">
+              <span class="weather-temperature"></span>
+              <span class="weather-description"></span>
+            </div>
+            <div class="weather-place">
+              <span class="weather-location"></span>
+              <span class="weather-updated" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+          <p class="weather-alerts" role="alert" hidden></p>
+          <div class="weather-forecasts">
+            <h3 class="weather-heading">Next 48 hours</h3>
+            <div class="weather-hourly" role="list" aria-label="Hourly forecast"></div>
+            <h3 class="weather-heading">This week</h3>
+            <div class="weather-daily" role="list" aria-label="Weekly forecast"></div>
+          </div>
+          <div class="weather-day-bubble" id="weather-day-bubble" role="tooltip" hidden></div>
         </section>
         <section class="app-switcher" aria-label="Open apps" aria-hidden="true" inert>
           <div class="app-switcher-track" role="status" aria-live="polite"></div>

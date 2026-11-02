@@ -1,3 +1,97 @@
+/*
+  renderer.js drives this stylesheet by toggling classes. Its only inline styles are positions on
+  the weather chart (--level, left, bottom) and the weather day bubble (left, top, transform-origin).
+
+  States on .pill:
+    aria-expanded="true|false", idle-transparent, notification-open, notification-closing,
+    volume-adjusting, music-open, music-closing, music-artwork-ready, apps-open, apps-closing,
+    weather-open, weather-closing, settings-open, settings-closing, settings-collapse,
+    settings-returning, settings-switching-out, settings-entering, app-switcher-open
+  States on children:
+    pill-option-disabled (hidden option), .pill-settings-option.is-disabled + aria-pressed,
+    data-weather-state (toggle, hours, week days), .weather-hour.is-new-day,
+    .weather-week-day.has-notice, .battery-percentage.is-low/.is-critical/.is-charging,
+    .music-previous/.music-next.is-bumping, .music-play-pause-icon.is-changing,
+    .weather-day-bubble.is-popping, .app-switcher-entry.is-entering/.is-leaving
+  Classes listed here with no rule below are hooks that are free to style.
+
+  Motion lives in the Motion section at the end. renderer.js waits on some of it, so keep these:
+    - a height transition on .pill (panels wait for it before resizing the window)
+    - an opacity transition on .apps-panel
+    - an animation on .app-switcher-entry.is-leaving (the entry is removed on animationend)
+  Every wait falls back after 900ms, but the leaving app switcher entry has no fallback.
+
+  Sizes: the Electron window is transparent and sized by main.js, so body stays transparent and
+  the pill heights below must match the window sizes there (collapsed 8, expanded 42, app
+  switcher 58, notification 120, music 240, settings 330, apps 360, weather 360). main.js adds
+  clear room around each size so the springs can overshoot without being clipped.
+*/
+
+/* ---------- Theme ---------- */
+/*
+  The pill is clear glass, so its look follows what is behind it. main.js samples the screen around
+  the pill and renderer.js sets data-backdrop on <html>:
+    dark  -> light glass with white text
+    light -> dark glass with black text
+  The rim is brightest at the top left and darkest at the bottom right, like light hitting glass.
+  Desktop content behind the window cannot be blurred, so the glass stays tinted and very clear.
+*/
+
+:root,
+:root[data-backdrop="dark"] {
+  color-scheme: dark;
+  --pill-fg: #fff;
+  --pill-fg-soft: rgba(255, 255, 255, 0.68);
+  --pill-fg-faint: rgba(255, 255, 255, 0.24);
+  --pill-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --glass-tint: linear-gradient(160deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.06) 48%, rgba(255, 255, 255, 0.1) 100%);
+  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0) 38%);
+  --glass-rim: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.3) 35%, rgba(255, 255, 255, 0.12) 70%, rgba(255, 255, 255, 0.4) 100%);
+  --glass-solid: rgba(255, 255, 255, 0.62);
+  --glass-inner-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.3), inset 0 -8px 18px rgba(255, 255, 255, 0.05);
+  --surface: rgba(255, 255, 255, 0.78);
+  --surface-strong: rgba(255, 255, 255, 0.84);
+  --surface-stronger: rgba(255, 255, 255, 0.9);
+  --pane-fg: #000;
+  --pane-fg-soft: rgba(0, 0, 0, 0.6);
+  --pane-knob: #262626;
+  --pane-knob-contrast: #fff;
+  --knob: #fff;
+  --knob-contrast: #262626;
+  --knob-track: rgba(255, 255, 255, 0.35);
+  --knob-track-empty: rgba(255, 255, 255, 0.08);
+  --knob-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --popover: rgba(255, 255, 255, 0.82);
+}
+
+:root[data-backdrop="light"] {
+  color-scheme: light;
+  --pill-fg: #000;
+  --pill-fg-soft: rgba(0, 0, 0, 0.6);
+  --pill-fg-faint: rgba(0, 0, 0, 0.2);
+  --pill-text-shadow: 0 1px 1px rgba(255, 255, 255, 0.5);
+  --glass-tint: linear-gradient(160deg, rgba(38, 38, 38, 0.14) 0%, rgba(38, 38, 38, 0.05) 48%, rgba(38, 38, 38, 0.1) 100%);
+  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 38%);
+  --glass-rim: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(150, 150, 150, 0.55) 35%, rgba(60, 60, 60, 0.5) 70%, rgba(90, 90, 90, 0.75) 100%);
+  --glass-solid: rgba(38, 38, 38, 0.6);
+  --glass-inner-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.6), inset 0 -8px 18px rgba(0, 0, 0, 0.05);
+  --surface: rgba(0, 0, 0, 0.78);
+  --surface-strong: rgba(0, 0, 0, 0.84);
+  --surface-stronger: rgba(0, 0, 0, 0.9);
+  --pane-fg: #fff;
+  --pane-fg-soft: rgba(255, 255, 255, 0.65);
+  --pane-knob: #fff;
+  --pane-knob-contrast: #262626;
+  --knob: #262626;
+  --knob-contrast: #fff;
+  --knob-track: rgba(38, 38, 38, 0.35);
+  --knob-track-empty: rgba(38, 38, 38, 0.08);
+  --knob-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  --popover: rgba(0, 0, 0, 0.82);
+}
+
+/* ---------- Base ---------- */
+
 * {
   box-sizing: border-box;
 }
@@ -11,19 +105,8 @@ body {
   background: transparent;
 }
 
-:root {
-  color-scheme: light;
-  --glass-edge: rgba(255, 255, 255, 0.54);
-  --glass-surface: rgba(237, 244, 255, 0.22);
-  --glass-hover: rgba(255, 255, 255, 0.28);
-  --glass-shadow: rgba(24, 39, 68, 0.2);
-  --text-muted: #000;
-  --hover-glow-icon: drop-shadow(0 0 4px rgba(255, 255, 255, 0.9)) drop-shadow(0 0 9px rgba(255, 255, 255, 0.55));
-  --hover-glow-text: 0 0 6px rgba(255, 255, 255, 0.95), 0 0 12px rgba(255, 255, 255, 0.6);
-}
-
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
   font-weight: 500;
   -webkit-font-smoothing: antialiased;
   user-select: none;
@@ -32,25 +115,14 @@ body {
 button {
   color: inherit;
   font: inherit;
-  transition:
-    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    background 100ms ease,
-    box-shadow 100ms ease,
-    text-shadow 180ms ease;
 }
 
-button:hover:not(:disabled) {
-  transform: scale(1.04);
+input::placeholder {
+  color: var(--pill-fg-soft);
 }
 
-.apps-toggle:hover:not(:disabled),
-.apps-toggle:focus-visible:not(:disabled),
-.app-launch-button:hover:not(:disabled),
-.pill-settings-option:hover:not(:disabled),
-.notification-close:hover,
-.notification-settings:hover {
-  text-shadow: var(--hover-glow-text);
-}
+/* ---------- Pill shell ---------- */
+/* Several states can be on at once, and later rules win, so keep this order. */
 
 .pill {
   position: fixed;
@@ -62,46 +134,72 @@ button:hover:not(:disabled) {
   width: 75px;
   height: 5px;
   padding: 0;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.48);
-  isolation: isolate;
-  background:
-    radial-gradient(ellipse 45% 95% at 18% 0%, rgba(255, 255, 255, 0.4), transparent 76%),
-    radial-gradient(ellipse 48% 100% at 84% 100%, rgba(141, 190, 255, 0.22), transparent 74%),
-    linear-gradient(155deg, rgba(255, 255, 255, 0.3), rgba(233, 241, 255, 0.12) 48%, rgba(255, 255, 255, 0.24)),
-    rgba(238, 245, 255, 0.18);
-  color: #000;
-  opacity: 0.75;
-  box-shadow:
-    0 2px 8px rgba(24, 39, 68, 0.16),
-    0 0 18px rgba(255, 255, 255, 0.52),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    inset 0 -1px 0 rgba(151, 174, 215, 0.24);
-  transform: translateX(-50%);
-  transform-origin: top center;
-  transition:
-    width 200ms ease,
-    height 400ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 160ms ease,
-    border-radius 200ms ease,
-    box-shadow 200ms ease;
+  overflow: hidden;
+  border: 0;
+  border-radius: 26px;
+  background-color: var(--glass-solid);
+  background-image: var(--glass-sheen), var(--glass-tint);
+  box-shadow: var(--glass-inner-shadow);
+  color: var(--pill-fg);
+  text-shadow: var(--pill-text-shadow);
+  translate: -50% 0;
+}
+
+/* The gradient rim: a 1px ring masked out of a full gradient, so it can follow the rounded corners.
+   Only the pill itself is glass. Everything inside it is a flat smoky pane with no rim or sheen. */
+.pill::after {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  padding: 1px;
+  border-radius: inherit;
+  background: var(--glass-rim);
+  content: "";
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+/* Refraction: content passing near the edge of the glass blurs, as if seen through its thick rim.
+   A blurred copy of what is underneath fades in toward the edges. It only reaches the pill's own
+   content, since the desktop behind the window can't be blurred. */
+.pill {
+  --refraction-depth: 7px;
+  --refraction-core: 2px;
+  --refraction-top: 7px;
+  --refraction-top-core: 2px;
+}
+
+/* Tall panels have room for a deeper rim on the sides and bottom, where content scrolls past.
+   The top stays shallow everywhere so the buttons and clock in the top bar stay sharp. */
+.pill.settings-open,
+.pill.music-open,
+.pill.apps-open,
+.pill.weather-open {
+  --refraction-depth: 16px;
+  --refraction-core: 3px;
+}
+
+.pill.notification-open {
+  --refraction-depth: 12px;
+  --refraction-core: 3px;
 }
 
 .pill::before {
   position: absolute;
   inset: 0;
+  z-index: 2;
   border-radius: inherit;
-  background:
-    radial-gradient(ellipse 38% 72% at 22% 0%, rgba(255, 255, 255, 0.32), transparent 78%),
-    radial-gradient(ellipse 44% 80% at 96% 32%, rgba(136, 194, 255, 0.16), transparent 74%),
-    radial-gradient(ellipse 70% 40% at 58% 115%, rgba(189, 166, 255, 0.13), transparent 76%);
   content: "";
-  opacity: 0.8;
   pointer-events: none;
+  backdrop-filter: blur(2.5px);
+  mask-image:
+    linear-gradient(to bottom, #000 var(--refraction-top-core), transparent var(--refraction-top), transparent calc(100% - var(--refraction-depth)), #000 calc(100% - var(--refraction-core))),
+    linear-gradient(to right, #000 var(--refraction-core), transparent var(--refraction-depth), transparent calc(100% - var(--refraction-depth)), #000 calc(100% - var(--refraction-core)));
 }
 
 .pill:hover {
-  opacity: 1;
   width: 84px;
   height: 6px;
 }
@@ -110,101 +208,241 @@ button:hover:not(:disabled) {
   opacity: 0;
 }
 
-.pill-content {
-  display: none;
-}
-
 .pill[aria-expanded="true"] {
   justify-content: space-between;
   width: 480px;
   height: 42px;
   padding: 0 18px;
-  overflow: hidden;
-  border-radius: 28px;
-  border-color: var(--glass-edge);
-  background:
-    radial-gradient(ellipse 54% 46% at 6% 0%, rgba(255, 255, 255, 0.36), transparent 76%),
-    radial-gradient(ellipse 44% 88% at 98% 26%, rgba(140, 191, 255, 0.2), transparent 76%),
-    radial-gradient(ellipse 72% 34% at 52% 112%, rgba(187, 162, 255, 0.16), transparent 78%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.3), rgba(236, 243, 255, 0.18) 52%, rgba(255, 255, 255, 0.24)),
-    var(--glass-surface);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    inset 0 -1px 0 rgba(148, 169, 207, 0.24);
-  opacity: 1;
+  background-color: transparent;
 }
 
 .pill.settings-open {
   width: 480px;
   height: 330px;
-  padding: 12px;
-  border-radius: 24px;
+  padding: 14px;
 }
 
 .pill.settings-closing {
   height: 42px;
   padding: 0 18px;
-  border-radius: 28px;
 }
 
 .pill.settings-closing.settings-collapse {
   width: 75px;
   height: 8px;
   padding: 0;
-  border-radius: 999px;
 }
 
 .pill.music-open {
   width: 480px;
   height: 240px;
-  background:
-    radial-gradient(ellipse 54% 46% at 6% 0%, rgba(255, 255, 255, 0.36), transparent 76%),
-    radial-gradient(ellipse 44% 88% at 98% 26%, rgba(140, 191, 255, 0.2), transparent 76%),
-    radial-gradient(ellipse 72% 34% at 52% 112%, rgba(187, 162, 255, 0.16), transparent 78%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.3), rgba(236, 243, 255, 0.18) 52%, rgba(255, 255, 255, 0.24)),
-    var(--glass-surface);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    inset 0 -1px 0 rgba(148, 169, 207, 0.24);
-  border-radius: 28px;
   padding: 4px 18px;
 }
 
 .pill.apps-open {
   width: 480px;
   height: 360px;
-  border-radius: 28px;
-  background:
-    radial-gradient(ellipse 54% 46% at 6% 0%, rgba(255, 255, 255, 0.36), transparent 76%),
-    radial-gradient(ellipse 44% 88% at 98% 26%, rgba(140, 191, 255, 0.2), transparent 76%),
-    radial-gradient(ellipse 72% 34% at 52% 112%, rgba(187, 162, 255, 0.16), transparent 78%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.3), rgba(236, 243, 255, 0.18) 52%, rgba(255, 255, 255, 0.24)),
-    var(--glass-surface);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    inset 0 -1px 0 rgba(148, 169, 207, 0.24);
 }
 
+.pill.weather-open {
+  width: 480px;
+  height: 360px;
+}
+
+/* A notification can arrive while any panel is open, so it must come after the panel sizes. */
 .pill.notification-open {
   width: 480px;
   height: 120px;
   padding: 12px 16px;
-  border-radius: 24px;
-  border-color: var(--glass-edge);
-  background:
-    radial-gradient(ellipse 54% 46% at 6% 0%, rgba(255, 255, 255, 0.36), transparent 76%),
-    radial-gradient(ellipse 44% 88% at 98% 26%, rgba(140, 191, 255, 0.2), transparent 76%),
-    radial-gradient(ellipse 72% 34% at 52% 112%, rgba(187, 162, 255, 0.16), transparent 78%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.3), rgba(236, 243, 255, 0.18) 52%, rgba(255, 255, 255, 0.24)),
-    var(--glass-surface);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    inset 0 -1px 0 rgba(148, 169, 207, 0.24);
+  background-color: transparent;
 }
 
-.pill.notification-closing {
-  border-radius: 24px;
+.pill.music-closing {
+  overflow: hidden;
 }
+
+.pill.app-switcher-open {
+  height: 58px;
+}
+
+/* ---------- Pill content ---------- */
+
+/* The layout stays on the base rule so the content can keep it while it fades out. */
+.pill-content {
+  position: relative;
+  display: none;
+  align-items: stretch;
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 0;
+}
+
+.pill[aria-expanded="true"] .pill-content {
+  display: flex;
+}
+
+.pill.music-closing .pill-content {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+.pill.notification-open .pill-content {
+  display: none;
+}
+
+/* ---------- Top bar: buttons on the left, date, time and battery on the right ---------- */
+
+.pill-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  flex: 0 0 auto;
+  min-height: 40px;
+  width: max-content;
+}
+
+.pill[aria-expanded="true"] .pill-actions {
+  position: absolute;
+  top: 20px;
+  left: 6px;
+  align-self: auto;
+  transform: translateY(-50%);
+}
+
+.pill-actions {
+  gap: 2px;
+}
+
+.pill-actions button {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 44px;
+  height: 28px;
+}
+
+.volume-toggle,
+.music-toggle,
+.weather-toggle,
+.apps-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.volume-toggle[aria-expanded="true"]::before,
+.music-toggle[aria-expanded="true"]::before,
+.weather-toggle[aria-expanded="true"]::before,
+.apps-toggle[aria-expanded="true"]::before {
+  background: var(--surface-strong);
+}
+
+.volume-toggle,
+.music-toggle,
+.weather-toggle {
+  justify-content: center;
+  font-size: 12px;
+}
+
+/* The state words vary in length, so the weather button sizes to its text. */
+.pill-actions button.weather-toggle {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 44px;
+  white-space: nowrap;
+}
+
+.weather-toggle[data-weather-state="danger"] {
+  font-weight: 600;
+}
+
+.apps-toggle {
+  order: -1;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.volume-toggle:focus-visible,
+.music-toggle:focus-visible,
+.weather-toggle:focus-visible,
+.apps-toggle:focus-visible,
+.volume-slider:focus-visible {
+  outline: 2px solid var(--pill-fg-soft);
+  outline-offset: 1px;
+}
+
+.pill-datetime {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.pill[aria-expanded="true"] .pill-datetime {
+  top: 20px;
+}
+
+/* ---------- Options turned off in Pill Settings ---------- */
+
+.pill-option-disabled {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.pill-actions button.pill-option-disabled {
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+}
+
+.pill-actions button.pill-option-disabled.weather-toggle {
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+}
+
+.pill-actions button.pill-option-disabled.apps-toggle {
+  flex: 0 0 0;
+  width: 0;
+}
+
+.pill-datetime > :not(.pill-option-disabled) {
+  max-width: 110px;
+}
+
+.pill-datetime > .pill-option-disabled {
+  flex: 0 0 0;
+  max-width: 0;
+  overflow: hidden;
+}
+
+/* ---------- Notification ---------- */
 
 .notification-toast {
   position: absolute;
@@ -215,23 +453,13 @@ button:hover:not(:disabled) {
   gap: 8px;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-8px) scale(0.98);
   visibility: hidden;
-  transition:
-    opacity 180ms ease,
-    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 260ms;
 }
 
 .pill.notification-open .notification-toast {
   opacity: 1;
   pointer-events: auto;
-  transform: translateY(0) scale(1);
   visibility: visible;
-  transition:
-    opacity 180ms ease,
-    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s;
 }
 
 .notification-header {
@@ -240,7 +468,6 @@ button:hover:not(:disabled) {
   align-items: center;
   justify-content: space-between;
   min-width: 0;
-  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -260,15 +487,12 @@ button:hover:not(:disabled) {
   height: 24px;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 999px;
   background: transparent;
   color: inherit;
   cursor: pointer;
   font-size: 18px;
-}
-
-.notification-close:hover {
-  background: var(--glass-hover);
+  line-height: 1;
 }
 
 .notification-content {
@@ -297,7 +521,6 @@ button:hover:not(:disabled) {
 
 .notification-message {
   margin: 0;
-  color: var(--text-muted);
   font-size: 12px;
   line-height: 1.35;
   -webkit-line-clamp: 2;
@@ -306,12 +529,16 @@ button:hover:not(:disabled) {
 .notification-settings {
   flex: 0 0 auto;
   align-self: flex-start;
-  padding: 4px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.62);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.24);
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface);
   cursor: pointer;
   font-size: 11px;
+}
+
+.notification-settings:hover {
+  background: var(--surface-strong);
 }
 
 .notification-settings[hidden] {
@@ -320,298 +547,15 @@ button:hover:not(:disabled) {
 
 .notification-close:focus-visible,
 .notification-settings:focus-visible {
-  outline: 2px solid #6b8afd;
+  outline: 2px solid var(--pill-fg-soft);
   outline-offset: 2px;
 }
 
-.pill.music-closing {
-  overflow: hidden;
+.notification-app {
+  color: var(--pill-fg-soft);
 }
 
-.pill[aria-expanded="true"] .pill-content {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
-
-.pill-datetime {
-  position: absolute;
-  top: 50%;
-  right: 6px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  transform: translateY(-50%);
-  opacity: 1;
-  transition:
-    opacity 180ms ease,
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s;
-}
-
-.battery-percentage.is-low {
-  color: #b58900;
-}
-
-.battery-percentage.is-critical {
-  color: #d00000;
-}
-
-.battery-percentage.is-charging {
-  display: inline-block;
-  animation: battery-charging-glow 3.0s ease-in-out infinite;
-}
-
-@keyframes battery-charging-glow {
-  0%,
-  100% {
-    filter: drop-shadow(0 0 0 rgba(92, 151, 255, 0));
-  }
-
-  50% {
-    filter:
-      drop-shadow(0 0 4px rgba(255, 255, 255, 0.95))
-      drop-shadow(0 0 9px rgba(250, 252, 255, 0.72));
-  }
-}
-
-.pill[aria-expanded="true"] .pill-actions {
-  position: absolute;
-  top: 20px;
-  left: 6px;
-  align-self: auto;
-  transform: translateY(-50%);
-}
-
-.pill[aria-expanded="true"] .pill-datetime {
-  top: 20px;
-}
-
-.pill-actions button {
-  flex: 0 0 44px;
-  width: 44px;
-  height: 40px;
-  transition:
-    opacity 180ms ease,
-    transform 180ms ease,
-    flex-basis 180ms ease,
-    width 180ms ease,
-    height 180ms ease,
-    padding 180ms ease,
-    visibility 0s,
-    background 100ms ease,
-    box-shadow 100ms ease,
-    text-shadow 180ms ease;
-}
-
-.pill-actions button:hover:not(:disabled) {
-  transform: none;
-}
-
-.pill.music-open .pill-actions {
-  top: 16px;
-  transform: translateY(-50%);
-}
-
-.pill.music-open .pill-datetime {
-  top: 16px;
-}
-
-.pill.apps-open .apps-panel {
-  display: flex;
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
-
-.pill.apps-closing .apps-panel {
-  display: flex;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(8px) scale(0.98);
-}
-
-.apps-panel {
-  position: absolute;
-  inset: 54px 0 0;
-  display: none;
-  flex-direction: column;
-  min-height: 0;
-  gap: 8px;
-  color: #000;
-  opacity: 0;
-  transform: translateY(8px) scale(0.98);
-  transition:
-    opacity 400ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 400ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.apps-panel-header {
-  display: flex;
-  flex: 0 0 40px;
-  align-items: center;
-  justify-content: center;
-}
-
-.apps-search {
-  width: min(300px, 80%);
-  min-width: 0;
-  padding: 7px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  border-radius: 10px;
-  outline: none;
-  background: rgba(255, 255, 255, 0.28);
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  opacity: 0;
-  transform: translateY(6px);
-  transition:
-    opacity 240ms ease,
-    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.pill.apps-open .apps-search {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.apps-search:disabled {
-  cursor: wait;
-}
-
-.apps-list {
-  display: grid;
-  flex: 1 1 auto;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-content: start;
-  min-height: 0;
-  gap: 4px 8px;
-  overflow: auto;
-  padding: 2px;
-  scrollbar-color: rgba(45, 59, 82, 0.42) transparent;
-  scrollbar-width: thin;
-}
-
-.app-launch-button {
-  width: 100%;
-  min-width: 0;
-  min-height: 36px;
-  overflow: hidden;
-  padding: 7px 10px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  cursor: pointer;
-  font-size: 12px;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.app-list-item {
-  min-width: 0;
-}
-
-.app-launch-button:hover:not(:disabled) {
-  border-color: rgba(255, 255, 255, 0.65);
-  background: var(--glass-hover);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-  transform: scale(1.02);
-}
-
-.app-launch-button:focus-visible {
-  outline: 2px solid #6b8afd;
-  outline-offset: -2px;
-}
-
-.app-launch-button:disabled {
-  cursor: wait;
-  opacity: 0.6;
-}
-
-.pill.music-closing .pill-content {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  gap: 8px;
-  justify-content: flex-start;
-}
-
-.pill.notification-open .pill-content {
-  display: none;
-}
-
-.pill.music-closing .pill-actions {
-  position: absolute;
-  top: 20px;
-  left: 6px;
-  align-self: auto;
-  transform: translateY(-50%);
-}
-
-.pill.music-closing .pill-datetime {
-  top: 20px;
-}
-
-.pill-option-disabled {
-  opacity: 0;
-  pointer-events: none;
-  transform: scale(0.92);
-  visibility: hidden;
-  transition:
-    opacity 180ms ease,
-    transform 180ms ease,
-    visibility 0s linear 180ms;
-}
-
-.pill-actions button.pill-option-disabled {
-  flex: 0 0 0;
-  width: 0;
-  min-width: 0;
-  height: 0;
-  padding: 0;
-  overflow: hidden;
-  transition:
-    opacity 180ms ease,
-    transform 180ms ease,
-    flex-basis 180ms ease,
-    width 180ms ease,
-    height 180ms ease,
-    padding 180ms ease,
-    visibility 0s linear 180ms;
-}
-
-.pill-datetime > :not(.pill-option-disabled) {
-  max-width: 110px;
-  transition:
-    opacity 180ms ease,
-    transform 180ms ease,
-    max-width 180ms ease,
-    visibility 0s;
-}
-
-.pill-datetime > .pill-option-disabled {
-  flex: 0 0 0;
-  max-width: 0;
-  overflow: hidden;
-  transition:
-    opacity 180ms ease,
-    transform 180ms ease,
-    max-width 180ms ease,
-    visibility 0s linear 180ms;
-}
+/* ---------- Pill Settings ---------- */
 
 .pill-settings-menu {
   display: none;
@@ -640,81 +584,34 @@ button:hover:not(:disabled) {
   flex-direction: column;
   min-height: 0;
   gap: 8px;
-  opacity: 1;
-  transform: translateY(0);
-  transition:
-    opacity 180ms ease,
-    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.pill.settings-open .pill-actions {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(calc(-50% + 8px)) scale(0.96);
-  transition:
-    opacity 140ms ease,
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 220ms;
-}
-
+.pill.settings-open .pill-actions,
 .pill.settings-open .pill-datetime {
   opacity: 0;
   pointer-events: none;
-  transform: translateY(calc(-50% + 8px)) scale(0.96);
-  transition:
-    opacity 140ms ease,
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 220ms;
 }
 
 .pill.settings-open.settings-closing .pill-actions,
 .pill.settings-open.settings-closing .pill-datetime {
   opacity: 1;
   pointer-events: auto;
-  transform: translateY(-50%) scale(1);
-  transition:
-    opacity 180ms ease,
-    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s;
-}
-
-.pill.settings-open.settings-returning .pill-actions,
-.pill.settings-open.settings-returning .pill-datetime {
-  animation: pill-settings-elements-enter 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
 .pill.settings-open.settings-collapse .pill-content > :not(.pill-settings-menu) {
   display: none;
 }
 
-.pill.settings-entering .pill-settings-menu {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(6px);
-}
-
+.pill.settings-entering .pill-settings-menu,
 .pill.settings-open.settings-closing .pill-settings-menu {
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-6px);
-}
-
-@keyframes pill-settings-elements-enter {
-  from {
-    opacity: 0;
-    transform: translateY(calc(-50% + 8px)) scale(0.96);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(-50%) scale(1);
-  }
 }
 
 .pill-settings-title {
   flex: 0 0 auto;
   margin: 0;
-  color: #000;
+  padding: 0 8px;
   font-size: 13px;
   font-weight: 600;
 }
@@ -735,88 +632,74 @@ button:hover:not(:disabled) {
   gap: 11px;
   padding: 4px 8px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: transparent;
-  color: #000;
   cursor: pointer;
   font-size: 12px;
   text-align: left;
-  transition:
-    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    color 180ms ease,
-    background 100ms ease,
-    box-shadow 100ms ease,
-    text-shadow 180ms ease;
-}
-
-.pill-settings-option:hover:not(:disabled) {
-  transform: scale(1.015);
-  background: var(--glass-hover);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-}
-
-.pill-settings-option.is-disabled {
-  color: rgba(0, 0, 0, 0.42);
 }
 
 .pill-settings-option:focus-visible {
-  outline: 2px solid #6b8afd;
+  outline: 2px solid var(--pill-fg-soft);
   outline-offset: -2px;
 }
 
+.pill-settings-option.is-disabled {
+  color: var(--pill-fg-soft);
+}
+
+/* A small glass switch: the knob sits left when off and right when on. */
 .pill-settings-indicator {
+  position: relative;
   display: inline-flex;
-  flex: 0 0 8px;
-  align-items: center;
-  justify-content: center;
-  width: 8px;
-  height: 8px;
-  border: 1px solid rgba(0, 0, 0, 0.42);
+  flex: 0 0 28px;
+  width: 28px;
+  height: 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--pill-fg-faint);
+}
+
+.pill-settings-indicator::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  opacity: 0.7;
-  transition:
-    background 180ms ease,
-    border-color 180ms ease,
-    opacity 180ms ease,
-    transform 180ms ease;
+  background: var(--pill-fg-soft);
+  content: "";
 }
 
 .pill-settings-option[aria-pressed="true"] .pill-settings-indicator {
-  border-color: #000;
-  background: #000;
-  opacity: 0.9;
+  border-color: transparent;
+  background: var(--knob);
 }
 
-.pill-settings-option.is-disabled .pill-settings-indicator {
-  opacity: 0.38;
-  transform: scale(0.9);
+.pill-settings-option[aria-pressed="true"] .pill-settings-indicator::after {
+  left: 14px;
+  background: var(--knob-contrast);
 }
+
+/* The weather row holds its toggle plus the zip code editor. */
+.pill-settings-row {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  min-height: 30px;
+  gap: 6px;
+}
+
+.pill-settings-row .pill-settings-option {
+  align-self: stretch;
+}
+
+/* ---------- Volume ---------- */
 
 .pill.volume-adjusting .pill-datetime {
   opacity: 0;
   pointer-events: none;
-  transform: translateY(calc(-50% + 6px)) scale(0.96);
-  transition:
-    opacity 140ms ease,
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 220ms;
   visibility: hidden;
-}
-
-.pill-actions {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  align-self: center;
-  flex: 0 0 auto;
-  min-height: 40px;
-  width: max-content;
-  opacity: 1;
-  transform: scale(1);
-  transition:
-    opacity 180ms ease,
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s;
 }
 
 .pill.volume-adjusting .pill-content {
@@ -824,19 +707,9 @@ button:hover:not(:disabled) {
 }
 
 .pill.volume-adjusting .pill-actions {
-  left: 50%;
-  transform: translate(-50%, -50%) scale(0.96);
-}
-
-.pill.volume-adjusting .pill-actions {
   opacity: 0;
   pointer-events: none;
-  transform: scale(0.96);
   visibility: hidden;
-  transition:
-    opacity 140ms ease,
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 220ms;
 }
 
 .volume-controls {
@@ -850,114 +723,130 @@ button:hover:not(:disabled) {
   width: 100%;
   min-width: 0;
   margin: 0;
+  gap: 10px;
   overflow: hidden;
   opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, calc(-50% + 6px)) scale(0.96);
+  translate: -50% -50%;
   visibility: hidden;
-  transition:
-    opacity 180ms ease,
-    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 240ms;
 }
 
 .pill.volume-adjusting .volume-controls {
   overflow: visible;
   opacity: 1;
   pointer-events: auto;
-  transform: translate(-50%, -50%) scale(1);
   visibility: visible;
-  transition:
-    opacity 180ms ease,
-    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s;
 }
 
-.volume-toggle,
-.music-toggle,
-.apps-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: 12px;
+.volume-slider {
+  width: min(250px, 100%);
+  height: 20px;
+  appearance: none;
   background: transparent;
   cursor: pointer;
 }
 
-.volume-toggle img,
-.music-toggle img {
-  width: 20px;
-  height: 20px;
-  object-fit: contain;
-  transition:
-    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    filter 180ms ease;
+.volume-slider {
+  --volume-fill: 50%;
+  border-radius: 999px;
 }
 
-.apps-toggle {
-  order: -1;
-  flex: 0 0 54px;
-  justify-content: center;
-  width: 54px;
+.volume-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--knob-track) var(--volume-fill), var(--knob-track-empty) var(--volume-fill));
+  /* Size the fill to the border box too, or the gradient repeats into the right border and shows a sliver of fill. */
+  background-origin: border-box;
+}
+
+.volume-slider::-moz-range-track {
+  height: 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--knob-track-empty);
+}
+
+.volume-slider::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--knob-track);
+}
+
+/* The ring drawn by the shadow makes the handle 1.5px wider than its travel, so it fully covers
+   the rounded tips of the track at either end instead of leaving a sliver of the fill showing. */
+.volume-slider::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  appearance: none;
+  border: 0;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: 0 0 0 1.5px var(--knob), var(--knob-shadow);
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: 0 0 0 1.5px var(--knob);
+}
+
+.volume-slider:disabled {
+  cursor: wait;
+}
+
+.volume-value {
+  display: none;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
-.pill-actions button.apps-toggle:hover:not(:disabled),
-.pill-actions button.apps-toggle:focus-visible:not(:disabled) {
-  transform: scale(1.08);
+.volume-error {
+  position: absolute;
+  top: 66px;
+  right: 24px;
+  font-size: 11px;
 }
 
-.pill-actions button.pill-option-disabled.apps-toggle {
-  flex: 0 0 0;
-  width: 0;
-}
-
-.volume-toggle:hover:not(:disabled) img,
-.music-toggle:hover:not(:disabled) img,
-.volume-toggle:focus-visible:not(:disabled) img,
-.music-toggle:focus-visible:not(:disabled) img {
-  filter: var(--hover-glow-icon) drop-shadow(0 1px 2px rgba(24, 39, 68, 0.22));
-  transform: translateY(-1px) scale(1.12);
-}
-
-.apps-toggle:hover:not(:disabled),
-.apps-toggle:focus-visible:not(:disabled) {
-  filter: drop-shadow(0 1px 2px rgba(24, 39, 68, 0.22));
-  transform: translateY(-1px) scale(1.12);
-}
-
-.volume-toggle:hover,
-.music-toggle:hover,
-.apps-toggle:hover {
-  background: var(--glass-hover);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-}
-
-.volume-toggle:focus-visible,
-.music-toggle:focus-visible,
-.apps-toggle:focus-visible,
-.volume-slider:focus-visible {
-  outline: 2px solid #6b8afd;
-  outline-offset: 3px;
-}
-
-.pill-content {
-  justify-content: center;
-  gap: 0;
-}
+/* ---------- Music ---------- */
 
 .pill.music-open .pill-content {
   gap: 8px;
   justify-content: flex-start;
 }
 
+.pill.music-open .pill-actions {
+  top: 16px;
+  transform: translateY(-50%);
+}
+
+.pill.music-open .pill-datetime {
+  top: 16px;
+}
+
+.pill.music-closing .pill-actions {
+  position: absolute;
+  top: 20px;
+  left: 6px;
+  align-self: auto;
+  transform: translateY(-50%);
+}
+
+.pill.music-closing .pill-datetime {
+  top: 20px;
+}
+
 .music-controls {
   display: none;
 }
 
-.pill.music-open .music-controls {
+.pill.music-open .music-controls,
+.pill.music-closing .music-controls {
   display: grid;
   flex: 1 1 0;
   grid-template-columns: 132px minmax(0, 1fr);
@@ -966,10 +855,6 @@ button:hover:not(:disabled) {
   width: 100%;
   min-height: 0;
   padding: 42px 12px 8px;
-}
-
-.pill.music-artwork-ready .music-artwork-wrap {
-  opacity: 1;
 }
 
 .music-artwork-wrap {
@@ -981,10 +866,8 @@ button:hover:not(:disabled) {
   width: 132px;
   height: 132px;
   overflow: hidden;
-  border-radius: 14px;
-  background: linear-gradient(145deg, #dce5ff, #f1e7fa);
-  opacity: 0;
-  transition: opacity 2s ease;
+  border-radius: 20px;
+  background: var(--surface);
 }
 
 .music-artwork {
@@ -995,9 +878,8 @@ button:hover:not(:disabled) {
 }
 
 .music-artwork-placeholder {
-  width: 58px;
-  height: 58px;
-  object-fit: contain;
+  color: var(--pill-fg-soft);
+  font-size: 14px;
 }
 
 .music-artwork-placeholder[hidden],
@@ -1029,20 +911,19 @@ button:hover:not(:disabled) {
 
 .music-artist {
   margin-top: 4px;
-  color: var(--text-muted);
   font-size: 13px;
 }
 
 .music-album {
   margin-top: 2px;
-  color: #000;
+  color: var(--pill-fg-soft);
   font-size: 11px;
 }
 
 .music-status {
   min-height: 15px;
   margin-top: 7px;
-  color: #000;
+  color: var(--pill-fg-soft);
   font-size: 10px;
 }
 
@@ -1060,108 +941,32 @@ button:hover:not(:disabled) {
   width: 36px;
   height: 36px;
   padding: 0;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 50%;
   background: transparent;
-  color: #000;
   cursor: pointer;
 }
 
-.music-actions button img {
-  width: 20px;
-  height: 20px;
-  object-fit: contain;
-  transition: filter 180ms ease;
-}
-
-.music-actions button:hover:not(:disabled) img {
-  filter: var(--hover-glow-icon);
-}
-
-.music-actions .music-previous.is-bumping {
-  animation: music-previous-bump 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.music-actions .music-next.is-bumping {
-  animation: music-next-bump 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-@keyframes music-previous-bump {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-
-  45% {
-    transform: translateX(-5px);
-  }
-}
-
-@keyframes music-next-bump {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-
-  45% {
-    transform: translateX(5px);
-  }
+.music-action-label {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: pre;
 }
 
 .music-actions .music-play-pause {
   width: 42px;
   height: 42px;
-  border: 1px solid rgba(255, 255, 255, 0.62);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.46), rgba(74, 82, 96, 0.52)),
-    rgba(92, 100, 112, 0.42);
-  box-shadow:
-    0 4px 12px rgba(28, 36, 48, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.72),
-    inset 0 -1px 0 rgba(36, 43, 53, 0.18);
-  -webkit-backdrop-filter: blur(8px) saturate(120%);
-  backdrop-filter: blur(8px) saturate(120%);
-  color: #000;
-}
-
-.music-actions .music-play-pause img {
-  width: 18px;
-  height: 18px;
-}
-
-.music-actions .music-play-pause img.is-changing {
-  animation: play-pause-icon-change 130ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-@keyframes play-pause-icon-change {
-  0% {
-    opacity: 0.65;
-    transform: scale(0.65) rotate(-25deg);
-  }
-
-  65% {
-    opacity: 1;
-    transform: scale(1.15) rotate(6deg);
-  }
-
-  100% {
-    transform: scale(1) rotate(0);
-  }
-}
-
-.music-actions button:hover:not(:disabled) {
-  background: var(--glass-hover);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  background: var(--surface-strong);
 }
 
 .music-actions .music-play-pause:hover:not(:disabled) {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.58), rgba(74, 82, 96, 0.62)),
-    rgba(92, 100, 112, 0.5);
+  background: var(--surface-stronger);
 }
 
 .music-actions button:focus-visible {
-  outline: 2px solid #6b8afd;
+  outline: 2px solid var(--pill-fg-soft);
   outline-offset: 2px;
 }
 
@@ -1170,110 +975,552 @@ button:hover:not(:disabled) {
   opacity: 0.45;
 }
 
-.volume-controls {
-  gap: 10px;
+/* ---------- Apps ---------- */
+
+.apps-panel {
+  position: absolute;
+  inset: 54px 0 0;
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  gap: 8px;
+  opacity: 0;
 }
 
-.volume-slider {
-  width: min(250px, 100%);
-  height: 20px;
-  appearance: none;
-  background: transparent;
-  cursor: pointer;
+.pill.apps-open .apps-panel {
+  display: flex;
+  opacity: 1;
 }
 
-.volume-slider::-webkit-slider-runnable-track {
-  height: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.62);
+.pill.apps-closing .apps-panel {
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.apps-panel-header {
+  display: flex;
+  flex: 0 0 40px;
+  align-items: center;
+  justify-content: center;
+}
+
+.apps-search {
+  width: min(300px, 80%);
+  min-width: 0;
+  padding: 7px 14px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.26);
-  box-shadow:
-    inset 0 1px 2px rgba(34, 48, 71, 0.12),
-    0 1px 0 rgba(255, 255, 255, 0.42);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  outline: none;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  opacity: 0;
 }
 
-.volume-slider::-moz-range-track {
-  height: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.62);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.26);
-  box-shadow:
-    inset 0 1px 2px rgba(34, 48, 71, 0.12),
-    0 1px 0 rgba(255, 255, 255, 0.42);
+.apps-search:focus {
+  background: var(--surface-strong);
 }
 
-.volume-slider::-webkit-slider-thumb {
-  width: 16px;
-  height: 16px;
-  margin-top: -6px;
-  appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow:
-    0 2px 6px rgba(28, 42, 66, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
-  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
-  transform-origin: center;
+.pill.apps-open .apps-search {
+  opacity: 1;
 }
 
-.volume-slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow:
-    0 2px 6px rgba(28, 42, 66, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
-  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
-  transform-origin: center;
-}
-
-.volume-slider:not(:disabled):hover::-webkit-slider-thumb {
-  transform: scale(1.25);
-}
-
-.volume-slider:not(:disabled):hover::-moz-range-thumb {
-  transform: scale(1.25);
-}
-
-.volume-slider:disabled {
+.apps-search:disabled {
   cursor: wait;
 }
 
-.volume-value {
-  display: none;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
+.apps-list {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  min-height: 0;
+  gap: 4px 8px;
+  overflow: auto;
+  padding: 2px 8px 12px;
+  scrollbar-color: var(--pill-fg-faint) transparent;
+  scrollbar-width: thin;
 }
 
-.volume-error {
+.app-list-item {
+  min-width: 0;
+}
+
+.app-launch-button {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  overflow: hidden;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-launch-button:focus-visible {
+  outline: 2px solid var(--pill-fg-soft);
+  outline-offset: -2px;
+}
+
+.app-launch-button:disabled {
+  cursor: wait;
+}
+
+/* ---------- Weather ---------- */
+
+.weather-panel {
   position: absolute;
-  top: 66px;
-  right: 24px;
-  color: #000;
+  inset: 50px 0 8px;
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  gap: 6px;
+  opacity: 0;
+}
+
+.pill.weather-open .weather-panel {
+  display: flex;
+  opacity: 1;
+}
+
+.pill.weather-closing .weather-panel {
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.weather-panel [hidden] {
+  display: none;
+}
+
+/* Zip code entry: the panel's first-run form, then the editor in the Pill Settings weather row. */
+.weather-zip-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.weather-zip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.weather-zip-input {
+  width: 110px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  outline: none;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.weather-zip-input:focus-visible,
+.weather-settings-input:focus-visible {
+  background: var(--surface-strong);
+}
+
+.weather-zip-save,
+.weather-settings-change,
+.weather-settings-save,
+.weather-settings-cancel {
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: pointer;
   font-size: 11px;
 }
 
-.pill.app-switcher-open {
-  height: 58px;
+.weather-zip-save:hover:not(:disabled),
+.weather-settings-change:hover,
+.weather-settings-save:hover:not(:disabled),
+.weather-settings-cancel:hover {
+  background: var(--surface-strong);
 }
+
+.weather-zip-save:disabled,
+.weather-zip-input:disabled,
+.weather-settings-save:disabled,
+.weather-settings-input:disabled {
+  cursor: wait;
+}
+
+.weather-zip-save:focus-visible,
+.weather-settings-change:focus-visible,
+.weather-settings-save:focus-visible,
+.weather-settings-cancel:focus-visible {
+  outline: 2px solid var(--pill-fg-soft);
+  outline-offset: 2px;
+}
+
+/* Must follow the shared button rule above to override its padding and size. */
+.weather-settings-change,
+.weather-settings-save,
+.weather-settings-cancel {
+  flex: 0 0 auto;
+  padding: 3px 11px;
+  font-size: 10px;
+}
+
+.weather-settings-form {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.weather-settings-form[hidden],
+.weather-settings-change[hidden] {
+  display: none;
+}
+
+.weather-settings-input {
+  width: 72px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  outline: none;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.weather-settings-status {
+  display: -webkit-box;
+  max-width: 160px;
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: right;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.weather-settings-status:empty {
+  display: none;
+}
+
+.weather-zip-status,
+.weather-zip-prompt {
+  color: var(--pill-fg-soft);
+}
+
+.weather-zip-status {
+  min-height: 15px;
+  font-size: 11px;
+}
+
+/* Current conditions */
+.weather-current {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 6px;
+}
+
+.weather-now {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 10px;
+}
+
+.weather-temperature {
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.weather-description {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weather-place {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: 210px;
+  gap: 2px 8px;
+  font-size: 10px;
+}
+
+.weather-location {
+  overflow: hidden;
+  width: 100%;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weather-alerts {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weather-forecasts {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  gap: 3px;
+}
+
+.weather-heading {
+  margin: 0;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* Hourly strip */
+.weather-hourly {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.weather-hour {
+  display: flex;
+  flex: 0 0 58px;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 3px 2px;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.weather-hour.is-new-day {
+  border-left: 1px solid var(--pill-fg-faint);
+}
+
+.weather-hour-time {
+  font-size: 10px;
+}
+
+/* Each dot sits higher for warmer hours, which traces the temperature across the strip. */
+.weather-hour-graph {
+  position: relative;
+  width: 100%;
+  height: 20px;
+}
+
+.weather-hour-dot {
+  position: absolute;
+  bottom: calc(var(--level, 0) * 14px);
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: var(--knob-shadow);
+}
+
+.weather-hour-temperature {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-hour-time,
+.weather-precipitation,
+.weather-heading,
+.weather-updated,
+.weather-week-marker {
+  color: var(--pill-fg-soft);
+}
+
+.weather-precipitation {
+  min-height: 11px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-hour-state[data-weather-state="danger"] {
+  font-weight: 600;
+}
+
+/* Weekly chart. The axis and plot share top and bottom insets so markers line up with the dots. */
+.weather-daily {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  --week-inset-top: 26px;
+  --week-inset-bottom: 8px;
+}
+
+.weather-week-axis {
+  position: absolute;
+  top: var(--week-inset-top);
+  bottom: var(--week-inset-bottom);
+  left: 0;
+  width: 30px;
+}
+
+.weather-week-marker {
+  position: absolute;
+  right: 4px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  transform: translateY(50%);
+}
+
+.weather-week-plot {
+  position: absolute;
+  top: var(--week-inset-top);
+  right: 6px;
+  bottom: var(--week-inset-bottom);
+  left: 34px;
+}
+
+.weather-week-gridline {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--pill-fg-faint);
+}
+
+.weather-week-line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.weather-week-line polyline {
+  fill: none;
+  stroke: var(--pill-fg);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.weather-week-day {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+  translate: -50% 50%;
+}
+
+.weather-week-day:focus-visible {
+  outline: none;
+}
+
+.weather-week-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: var(--knob-shadow);
+}
+
+.weather-week-day:focus-visible .weather-week-dot {
+  outline: 2px solid var(--pill-fg-soft);
+  outline-offset: 2px;
+}
+
+.weather-week-day[data-weather-state="danger"] .weather-week-dot,
+.weather-week-day.has-notice .weather-week-dot {
+  border: 2px solid var(--knob);
+  background: var(--knob-contrast);
+}
+
+.weather-week-label {
+  position: absolute;
+  bottom: calc(50% + 10px);
+  left: 50%;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+/* Day details shown when hovering a dot on the weekly chart */
+.weather-day-bubble {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  max-width: 220px;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: var(--popover);
+  backdrop-filter: blur(14px) saturate(140%);
+  font-size: 11px;
+  line-height: 1.3;
+  pointer-events: none;
+}
+
+.weather-bubble-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.weather-bubble-notice {
+  font-weight: 600;
+}
+
+/* ---------- App switcher ---------- */
 
 .pill.app-switcher-open .pill-actions,
 .pill.app-switcher-open .pill-datetime {
   opacity: 0;
   pointer-events: none;
-  transform: translateY(calc(-50% + 8px)) scale(0.96);
   visibility: hidden;
-  transition:
-    opacity 140ms ease,
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 220ms;
 }
 
 .app-switcher {
@@ -1283,25 +1530,14 @@ button:hover:not(:disabled) {
   align-items: center;
   gap: 12px;
   padding: 0 6px;
-  color: #000;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(6px) scale(0.98);
   visibility: hidden;
-  transition:
-    opacity 180ms ease,
-    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 240ms;
 }
 
 .pill.app-switcher-open .app-switcher {
   opacity: 1;
-  transform: translateY(0) scale(1);
   visibility: visible;
-  transition:
-    opacity 180ms ease,
-    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s;
 }
 
 .app-switcher-track {
@@ -1324,42 +1560,6 @@ button:hover:not(:disabled) {
   text-align: center;
 }
 
-.app-switcher-entry.is-entering {
-  animation: app-switcher-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.app-switcher-entry.is-leaving {
-  animation: app-switcher-leave 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-@keyframes app-switcher-enter {
-  from {
-    opacity: 0;
-    filter: blur(2px);
-    transform: translateX(40%);
-  }
-
-  to {
-    opacity: 1;
-    filter: blur(0);
-    transform: translateX(0);
-  }
-}
-
-@keyframes app-switcher-leave {
-  from {
-    opacity: 1;
-    filter: blur(0);
-    transform: translateX(0);
-  }
-
-  to {
-    opacity: 0;
-    filter: blur(2px);
-    transform: translateX(-40%);
-  }
-}
-
 .app-switcher-name,
 .app-switcher-title {
   max-width: 100%;
@@ -1375,87 +1575,655 @@ button:hover:not(:disabled) {
 }
 
 .app-switcher-title {
+  color: var(--pill-fg-soft);
   font-size: 11px;
   line-height: 1.3;
-  opacity: 0.62;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .pill {
-    transition: none;
-  }
+/* ---------- Text on panes ---------- */
+/* Panes are nearly solid white or black, so anything on them flips to the opposite text and knob colors. */
 
-  .app-switcher,
-  .pill.app-switcher-open .app-switcher,
-  .pill.app-switcher-open .pill-actions,
-  .pill.app-switcher-open .pill-datetime,
-  .volume-controls,
-  .pill-actions,
-  button,
-  .music-artwork-wrap,
-  .notification-toast,
-  .apps-panel,
-  .apps-list,
-  .app-launch-button,
-  .apps-search,
-  .pill-settings-menu,
-  .pill.settings-open .pill-settings-menu,
-  .pill.settings-open .pill-actions,
-  .pill.settings-open .pill-datetime,
-  .pill.settings-returning .pill-actions,
-  .pill.settings-returning .pill-datetime,
-  .pill-settings-option,
-  .pill-settings-indicator,
-  .pill-option-disabled,
-  .pill-datetime > :not(.pill-option-disabled) {
-    transition: none;
-  }
+.volume-toggle:hover,
+.music-toggle:hover,
+.weather-toggle:hover,
+.apps-toggle:hover,
+.volume-toggle[aria-expanded="true"],
+.music-toggle[aria-expanded="true"],
+.weather-toggle[aria-expanded="true"],
+.apps-toggle[aria-expanded="true"],
+.app-launch-button:hover:not(:disabled),
+.pill-settings-option:hover,
+.apps-search,
+.weather-zip-input,
+.weather-settings-input,
+.weather-zip-save,
+.weather-settings-change,
+.weather-settings-save,
+.weather-settings-cancel,
+.notification-settings,
+.notification-close:hover,
+.music-actions button:hover:not(:disabled),
+.music-actions .music-play-pause,
+.music-artwork-wrap,
+.weather-hour:hover,
+.weather-day-bubble {
+  --pill-fg: var(--pane-fg);
+  --pill-fg-soft: var(--pane-fg-soft);
+  --knob: var(--pane-knob);
+  --knob-contrast: var(--pane-knob-contrast);
+  color: var(--pill-fg);
+  text-shadow: none;
+}
 
-  .pill.settings-open.settings-returning .pill-actions,
-  .pill.settings-open.settings-returning .pill-datetime {
-    animation: none;
-  }
+/* ---------- Motion ---------- */
+/*
+  Two kinds of motion, matching the two materials:
+    Glass (the pill, and anything that moves on it) flows like water: springs that overshoot a
+    little and settle. --ease-flow is for big moves, --ease-pop for small, livelier ones.
+    Smoky panes (highlights, fields, popovers) drift in and out like smoke: a soft blur and fade.
+  The springs are sampled damped-spring curves. --ease-flow peaks about 5% past its target, which is
+  the room main.js leaves around the window. --ease-pop peaks about 16% past, so keep it to small moves.
+*/
 
-  button:hover:not(:disabled) {
-    transform: none;
-  }
+:root {
+  interpolate-size: allow-keywords;
+  --ease-flow: linear(0, 0.0235, 0.0843, 0.1698, 0.2696, 0.3753, 0.4807, 0.5812, 0.6735, 0.7558, 0.827, 0.8869, 0.9359, 0.9746, 1.0041, 1.0256, 1.0402, 1.0491, 1.0534, 1.0542, 1.0523, 1.0487, 1.0438, 1.0382, 1.0325, 1.0268, 1.0214, 1.0166, 1.0122, 1.0085, 1.0054, 1.0029, 1.0009, 0.9994, 0.9984, 0.9977, 0.9973, 0.9971, 0.9971, 0.9972, 1);
+  --ease-pop: linear(0, 0.0433, 0.1538, 0.3044, 0.4721, 0.6385, 0.7902, 0.9186, 1.0194, 1.0918, 1.1372, 1.1592, 1.1622, 1.1511, 1.1305, 1.1046, 1.0771, 1.0505, 1.0269, 1.0074, 0.9925, 0.9822, 0.9761, 0.9736, 0.9739, 0.9763, 0.98, 0.9844, 0.9889, 0.9931, 0.9967, 0.9997, 1.0019, 1.0033, 1.0041, 1.0043, 1.0042, 1.0037, 1.003, 1.0023, 1);
+  --ease-smoke: cubic-bezier(0.4, 0, 0.2, 1);
+  --flow-time: 650ms;
+  --pop-time: 520ms;
+  --smoke-time: 320ms;
+}
 
-  .volume-slider::-webkit-slider-thumb {
-    transition: none;
+@keyframes rise {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+    translate: 0 8px;
   }
+}
 
-  .volume-slider::-moz-range-thumb {
-    transition: none;
+@keyframes smoke-in {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+    scale: 0.92;
   }
+}
 
-  .volume-toggle img,
-  .music-toggle img,
-  .music-actions button img {
-    transition: none;
+/* Pill shell: grows and shrinks like a drop of water. */
+.pill {
+  transition:
+    width var(--flow-time) var(--ease-flow),
+    height var(--flow-time) var(--ease-flow),
+    padding var(--flow-time) var(--ease-flow),
+    scale var(--pop-time) var(--ease-pop),
+    background-color var(--smoke-time) var(--ease-smoke),
+    color var(--smoke-time) var(--ease-smoke),
+    opacity 400ms var(--ease-smoke);
+}
+
+/* The closed pill swells under the pointer with a livelier spring. */
+.pill[aria-expanded="false"]:hover {
+  transition:
+    width var(--pop-time) var(--ease-pop),
+    height var(--pop-time) var(--ease-pop),
+    padding var(--pop-time) var(--ease-pop),
+    scale var(--pop-time) var(--ease-pop),
+    background-color var(--smoke-time) var(--ease-smoke),
+    color var(--smoke-time) var(--ease-smoke),
+    opacity 400ms var(--ease-smoke);
+}
+
+.pill[aria-expanded="false"]:active {
+  scale: 0.94;
+}
+
+/* Content flows in once the pill opens and fades out quickly as it closes. */
+.pill-content {
+  opacity: 0;
+  filter: blur(4px);
+  translate: 0 -4px;
+  transition:
+    opacity 180ms var(--ease-smoke),
+    filter 180ms var(--ease-smoke),
+    translate 180ms var(--ease-smoke),
+    display 180ms allow-discrete;
+}
+
+.pill[aria-expanded="true"] .pill-content {
+  opacity: 1;
+  filter: none;
+  translate: none;
+  transition:
+    opacity 360ms var(--ease-smoke) 90ms,
+    filter 360ms var(--ease-smoke) 90ms,
+    translate var(--flow-time) var(--ease-flow) 60ms,
+    display 0s allow-discrete;
+}
+
+@starting-style {
+  .pill[aria-expanded="true"] .pill-content {
+    opacity: 0;
+    filter: blur(4px);
+    translate: 0 -4px;
   }
+}
 
-  .volume-toggle:hover:not(:disabled) img,
-  .music-toggle:hover:not(:disabled) img,
-  .volume-toggle:focus-visible:not(:disabled) img,
-  .music-toggle:focus-visible:not(:disabled) img {
+.pill.notification-open .pill-content {
+  opacity: 0;
+  transition: opacity 160ms var(--ease-smoke), display 160ms allow-discrete;
+}
+
+/* Top bar: buttons and the date and time step aside for the volume slider and the app switcher. */
+.pill-actions,
+.pill-datetime {
+  transition:
+    opacity 260ms var(--ease-smoke),
+    visibility 260ms,
+    filter 260ms var(--ease-smoke),
+    scale var(--flow-time) var(--ease-flow);
+}
+
+.pill.volume-adjusting .pill-actions,
+.pill.volume-adjusting .pill-datetime,
+.pill.app-switcher-open .pill-actions,
+.pill.app-switcher-open .pill-datetime {
+  filter: blur(3px);
+  scale: 0.94;
+}
+
+.volume-toggle,
+.music-toggle,
+.weather-toggle,
+.apps-toggle {
+  transition:
+    color var(--smoke-time) var(--ease-smoke),
+    scale var(--pop-time) var(--ease-pop),
+    width var(--flow-time) var(--ease-flow),
+    min-width var(--flow-time) var(--ease-flow),
+    height var(--flow-time) var(--ease-flow),
+    padding var(--flow-time) var(--ease-flow),
+    opacity 260ms var(--ease-smoke),
+    visibility 260ms;
+}
+
+.volume-toggle:active,
+.music-toggle:active,
+.weather-toggle:active,
+.apps-toggle:active {
+  scale: 0.92;
+}
+
+/* Options turned off in Pill Settings drain away instead of vanishing. */
+.pill-datetime > * {
+  transition:
+    max-width var(--flow-time) var(--ease-flow),
+    opacity 260ms var(--ease-smoke),
+    visibility 260ms;
+}
+
+/* Smoky highlights sit on a ::before so they can drift in and out without moving the text. */
+.volume-toggle,
+.music-toggle,
+.weather-toggle,
+.apps-toggle,
+.app-launch-button,
+.pill-settings-option,
+.music-previous,
+.music-next,
+.notification-close,
+.weather-hour {
+  position: relative;
+  isolation: isolate;
+}
+
+.volume-toggle::before,
+.music-toggle::before,
+.weather-toggle::before,
+.apps-toggle::before,
+.app-launch-button::before,
+.pill-settings-option::before,
+.music-previous::before,
+.music-next::before,
+.notification-close::before,
+.weather-hour::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--surface);
+  content: "";
+  opacity: 0;
+  filter: blur(6px);
+  scale: 0.9;
+  pointer-events: none;
+  transition:
+    opacity var(--smoke-time) var(--ease-smoke),
+    filter var(--smoke-time) var(--ease-smoke),
+    scale var(--smoke-time) var(--ease-smoke),
+    background-color var(--smoke-time) var(--ease-smoke);
+}
+
+.volume-toggle:hover::before,
+.music-toggle:hover::before,
+.weather-toggle:hover::before,
+.apps-toggle:hover::before,
+.volume-toggle[aria-expanded="true"]::before,
+.music-toggle[aria-expanded="true"]::before,
+.weather-toggle[aria-expanded="true"]::before,
+.apps-toggle[aria-expanded="true"]::before,
+.app-launch-button:hover:not(:disabled)::before,
+.pill-settings-option:hover::before,
+.music-previous:hover:not(:disabled)::before,
+.music-next:hover:not(:disabled)::before,
+.notification-close:hover::before,
+.weather-hour:hover::before {
+  opacity: 1;
+  filter: none;
+  scale: 1;
+}
+
+.app-launch-button,
+.pill-settings-option,
+.music-previous,
+.music-next,
+.notification-close,
+.weather-hour {
+  transition: color var(--smoke-time) var(--ease-smoke);
+}
+
+.weather-hour {
+  border-radius: 10px;
+}
+
+/* Fields and buttons are smoke too: their panes fade between shades. */
+.weather-zip-input,
+.weather-settings-input,
+.weather-zip-save,
+.weather-settings-change,
+.weather-settings-save,
+.weather-settings-cancel,
+.notification-settings,
+.music-actions .music-play-pause {
+  transition:
+    background-color var(--smoke-time) var(--ease-smoke),
+    color var(--smoke-time) var(--ease-smoke),
+    opacity var(--smoke-time) var(--ease-smoke);
+}
+
+/* Settings switch: the knob springs across while the track fades. */
+.pill-settings-indicator {
+  transition: background-color var(--smoke-time) var(--ease-smoke);
+}
+
+.pill-settings-indicator::after {
+  transition:
+    left var(--pop-time) var(--ease-pop),
+    background-color var(--smoke-time) var(--ease-smoke);
+}
+
+/* ---------- Motion: panels ---------- */
+
+/* Pill Settings: the menu settles in, then its rows rise one after another. */
+.pill-settings-menu {
+  transition:
+    opacity 300ms var(--ease-smoke),
+    filter 300ms var(--ease-smoke),
+    translate var(--flow-time) var(--ease-flow);
+}
+
+.pill.settings-entering .pill-settings-menu,
+.pill.settings-open.settings-closing .pill-settings-menu {
+  filter: blur(4px);
+  translate: 0 8px;
+}
+
+.pill-settings-options > * {
+  transition:
+    opacity 360ms var(--ease-smoke),
+    translate var(--flow-time) var(--ease-flow);
+  transition-delay: calc(sibling-index() * 30ms);
+}
+
+.pill.settings-entering .pill-settings-options > * {
+  opacity: 0;
+  translate: 0 10px;
+}
+
+/* Volume: the slider spreads out from the middle like water. */
+.volume-controls {
+  filter: blur(3px);
+  scale: 0.8 1;
+  transition:
+    opacity 260ms var(--ease-smoke),
+    visibility 260ms,
+    filter 260ms var(--ease-smoke),
+    scale var(--flow-time) var(--ease-flow);
+}
+
+.pill.volume-adjusting .volume-controls {
+  filter: none;
+  scale: 1;
+  transition:
+    opacity 300ms var(--ease-smoke) 80ms,
+    visibility 0s,
+    filter 300ms var(--ease-smoke) 80ms,
+    scale var(--flow-time) var(--ease-flow) 40ms;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  transition: transform var(--pop-time) var(--ease-pop);
+}
+
+.volume-slider:hover:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.18);
+}
+
+.volume-slider:active:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.3);
+}
+
+/* Music */
+.pill.music-open .music-controls {
+  transition:
+    opacity 360ms var(--ease-smoke) 120ms,
+    filter 360ms var(--ease-smoke) 120ms,
+    translate var(--flow-time) var(--ease-flow) 80ms;
+}
+
+@starting-style {
+  .pill.music-open .music-controls {
+    opacity: 0;
+    filter: blur(4px);
+    translate: 0 10px;
+  }
+}
+
+.pill.music-closing .music-controls {
+  opacity: 0;
+  filter: blur(4px);
+  translate: 0 -6px;
+  transition:
+    opacity 200ms var(--ease-smoke),
+    filter 200ms var(--ease-smoke),
+    translate 200ms var(--ease-smoke);
+}
+
+/* The artwork pane gathers like smoke once the pill has finished growing. */
+.music-artwork-wrap {
+  opacity: 0;
+  filter: blur(8px);
+  scale: 0.94;
+  transition:
+    opacity 420ms var(--ease-smoke),
+    filter 420ms var(--ease-smoke),
+    scale 420ms var(--ease-smoke);
+}
+
+.pill.music-artwork-ready .music-artwork-wrap {
+  opacity: 1;
+  filter: none;
+  scale: 1;
+}
+
+@keyframes nudge-back {
+  35% {
+    translate: -5px 0;
+  }
+}
+
+@keyframes nudge-forward {
+  35% {
+    translate: 5px 0;
+  }
+}
+
+.music-previous.is-bumping .music-action-label {
+  animation: nudge-back 420ms var(--ease-smoke);
+}
+
+.music-next.is-bumping .music-action-label {
+  animation: nudge-forward 420ms var(--ease-smoke);
+}
+
+@keyframes icon-swap {
+  from {
+    opacity: 0;
+    scale: 0.4;
+  }
+}
+
+.music-play-pause-icon.is-changing {
+  animation: icon-swap var(--pop-time) var(--ease-pop);
+}
+
+/* Apps */
+.apps-panel {
+  transition:
+    opacity 260ms var(--ease-smoke),
+    filter 260ms var(--ease-smoke),
+    translate var(--flow-time) var(--ease-flow);
+}
+
+@starting-style {
+  .pill.apps-open .apps-panel {
+    opacity: 0;
+    filter: blur(4px);
+    translate: 0 10px;
+  }
+}
+
+.pill.apps-closing .apps-panel {
+  filter: blur(4px);
+  translate: 0 -6px;
+}
+
+.apps-search {
+  filter: blur(6px);
+  scale: 0.94;
+  transition:
+    background-color var(--smoke-time) var(--ease-smoke),
+    opacity 420ms var(--ease-smoke) 100ms,
+    filter 420ms var(--ease-smoke) 100ms,
+    scale 420ms var(--ease-smoke) 100ms;
+}
+
+.pill.apps-open .apps-search {
+  filter: none;
+  scale: 1;
+}
+
+/* Scrolling lists refract at their edges too: each item blurs and stretches along the scroll as it
+   crosses into or out of view, driven by its own scroll position. Edge refraction comes first so the
+   entrance rise wins while it plays; the rise only fills backwards, so it lets go once it ends. */
+@keyframes refract-block {
+  entry 0%,
+  exit 100% {
+    opacity: 0.55;
+    filter: blur(2px);
+    scale: 0.97 1.12;
+  }
+  entry 100%,
+  exit 0% {
+    opacity: 1;
     filter: none;
-    transform: none;
+    scale: 1;
   }
+}
 
-  .music-actions .music-play-pause img.is-changing {
-    animation: none;
+@keyframes refract-inline {
+  entry 0%,
+  exit 100% {
+    opacity: 0.55;
+    filter: blur(2px);
+    scale: 1.12 0.97;
   }
-
-  .music-actions .music-previous.is-bumping,
-  .music-actions .music-next.is-bumping {
-    animation: none;
+  entry 100%,
+  exit 0% {
+    opacity: 1;
+    filter: none;
+    scale: 1;
   }
+}
 
-  .volume-slider:not(:disabled):hover::-webkit-slider-thumb {
-    transform: none;
+.app-list-item {
+  animation:
+    refract-block linear both,
+    rise 420ms var(--ease-flow) backwards;
+  animation-timeline: view(block), auto;
+  animation-delay: 0s, calc(min(sibling-index(), 16) * 20ms);
+}
+
+/* Weather */
+.weather-panel {
+  transition:
+    opacity 260ms var(--ease-smoke),
+    filter 260ms var(--ease-smoke),
+    translate var(--flow-time) var(--ease-flow);
+}
+
+@starting-style {
+  .pill.weather-open .weather-panel {
+    opacity: 0;
+    filter: blur(4px);
+    translate: 0 10px;
   }
+}
 
-  .volume-slider:not(:disabled):hover::-moz-range-thumb {
-    transform: none;
+.pill.weather-closing .weather-panel {
+  filter: blur(4px);
+  translate: 0 -6px;
+}
+
+.weather-hour {
+  animation:
+    refract-inline linear both,
+    rise 460ms var(--ease-flow) backwards;
+  animation-timeline: view(inline), auto;
+  animation-delay: 0s, calc(min(sibling-index(), 12) * 26ms);
+}
+
+.weather-hour-dot,
+.weather-week-dot {
+  transition: scale var(--pop-time) var(--ease-pop);
+}
+
+.weather-hour:hover .weather-hour-dot {
+  scale: 1.5;
+}
+
+/* The week's line pours across the chart, and each day drops in behind it. */
+@keyframes pour {
+  from {
+    clip-path: inset(-10px 100% -10px -10px);
+  }
+  to {
+    clip-path: inset(-10px -10px -10px -10px);
+  }
+}
+
+.weather-week-line {
+  animation: pour 900ms cubic-bezier(0.65, 0, 0.35, 1) 120ms both;
+}
+
+@keyframes drop-in {
+  from {
+    opacity: 0;
+    scale: 0;
+  }
+}
+
+.weather-week-day {
+  animation: drop-in var(--pop-time) var(--ease-pop) both;
+  animation-delay: calc(sibling-index() * 45ms);
+}
+
+.weather-week-day:hover .weather-week-dot,
+.weather-week-day:focus-visible .weather-week-dot {
+  scale: 1.7;
+}
+
+.weather-week-label {
+  transition: translate var(--pop-time) var(--ease-pop);
+}
+
+.weather-week-day:hover .weather-week-label,
+.weather-week-day:focus-visible .weather-week-label {
+  translate: 0 -3px;
+}
+
+.weather-day-bubble.is-popping {
+  animation: smoke-in 300ms var(--ease-smoke);
+}
+
+/* Notification: drops into the opened pill, then fades as the pill closes around it. */
+.notification-toast {
+  filter: blur(4px);
+  translate: 0 -8px;
+  transition:
+    opacity 200ms var(--ease-smoke),
+    visibility 200ms,
+    filter 200ms var(--ease-smoke),
+    translate 200ms var(--ease-smoke);
+}
+
+.pill.notification-open .notification-toast {
+  filter: none;
+  translate: none;
+  transition:
+    opacity 380ms var(--ease-smoke) 140ms,
+    visibility 0s,
+    filter 380ms var(--ease-smoke) 140ms,
+    translate var(--flow-time) var(--ease-flow) 100ms;
+}
+
+/* App switcher: each app flows in from the right and the last one drifts off to the left. */
+.app-switcher {
+  transition: opacity 300ms var(--ease-smoke), visibility 300ms;
+}
+
+@keyframes switcher-in {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    translate: 40px 0;
+  }
+}
+
+@keyframes switcher-out {
+  to {
+    opacity: 0;
+    filter: blur(4px);
+    translate: -40px 0;
+  }
+}
+
+.app-switcher-entry.is-entering {
+  animation: switcher-in var(--flow-time) var(--ease-flow) both;
+}
+
+.app-switcher-entry.is-leaving {
+  animation: switcher-out 260ms var(--ease-smoke) both;
+}
+
+/* Battery: breathes slowly while charging. */
+@keyframes breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.battery-percentage.is-charging {
+  animation: breathe 2.6s ease-in-out infinite;
+}
+
+/* renderer.js also stops waiting on motion when this is set. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
   }
 }

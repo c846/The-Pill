@@ -12,9 +12,11 @@ The Pill sits at the top of the screen and may be clicked to open it up. You can
 <img width="452" height="407" alt="Screenshot 2026-10-29 113818" src="https://github.com/user-attachments/assets/16e9c144-f12a-4e86-a77f-cc9e8255aa2e" />
 
 #### How do I use the Pill?  
-The **alt + shift + w** keyboard shortcut toggles the visibility of the Pill. It can still be interacted with and remains in the same location.
+The **alt + w** keyboard shortcut toggles the visibility of the Pill. It can still be interacted with and remains in the same location.
 
-The **alt + shift + q** keyboard shortcut opens the app switcher. Keep holding alt + shift and press **q** to cycle through your open apps, then release alt to switch to the selected one. Press **esc** to cancel.
+The **alt + space** keyboard shortcut opens the app switcher. Keep holding alt and press **space** to cycle through your open apps, then release alt to switch to the selected one. Press **esc** to cancel.
+
+The **alt + q** keyboard shortcut opens app search.
 
 #### The state of the Pill!  
 The Pill is still relatively rudimentary, but I will most likely add new features unless I don't feel like it later down the line. Most of the bugs are probably ironed out.

@@ -14,6 +14,28 @@ const appsToggle = document.querySelector('.apps-toggle');
 const appsPanel = document.querySelector('.apps-panel');
 const appsSearch = document.querySelector('.apps-search');
 const appsList = document.querySelector('.apps-list');
+const weatherToggle = document.querySelector('.weather-toggle');
+const weatherPanel = document.querySelector('.weather-panel');
+const weatherZipForm = document.querySelector('.weather-zip-form');
+const weatherZipInput = document.querySelector('.weather-zip-input');
+const weatherZipSave = document.querySelector('.weather-zip-save');
+const weatherZipStatus = document.querySelector('.weather-zip-status');
+const weatherSettingsChange = document.querySelector('.weather-settings-change');
+const weatherSettingsForm = document.querySelector('.weather-settings-form');
+const weatherSettingsInput = document.querySelector('.weather-settings-input');
+const weatherSettingsSave = document.querySelector('.weather-settings-save');
+const weatherSettingsCancel = document.querySelector('.weather-settings-cancel');
+const weatherSettingsStatus = document.querySelector('.weather-settings-status');
+const weatherCurrent = document.querySelector('.weather-current');
+const weatherTemperature = document.querySelector('.weather-temperature');
+const weatherDescription = document.querySelector('.weather-description');
+const weatherLocation = document.querySelector('.weather-location');
+const weatherUpdated = document.querySelector('.weather-updated');
+const weatherAlerts = document.querySelector('.weather-alerts');
+const weatherForecasts = document.querySelector('.weather-forecasts');
+const weatherHourly = document.querySelector('.weather-hourly');
+const weatherDaily = document.querySelector('.weather-daily');
+const weatherDayBubble = document.querySelector('.weather-day-bubble');
 const appSwitcher = document.querySelector('.app-switcher');
 const appSwitcherTrack = document.querySelector('.app-switcher-track');
 const musicArtwork = document.querySelector('.music-artwork');
@@ -62,10 +84,35 @@ let appSwitcherCommitRequested = false;
 let appSwitcherRequestId = 0;
 let volumeKeyTimer;
 let volumeSliderAnimation;
+let weatherOpen = false;
+let weatherPanelRequestId = 0;
+let weatherReport = { status: 'unset' };
+let editingWeatherZip = false;
+
+// Turn this off if the stylesheet ever drops its transitions, or the waits below sit on their fallbacks.
+const motionEnabled = true;
+// The pill's spring takes about 650ms, so waits fall back a little after that.
+const transitionFallback = 900;
+
+function isMotionReduced() {
+  return !motionEnabled || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+// These state keys also serve as the data-weather-state values for styling the toggle.
+const weatherStateNames = {
+  clear: 'Clear',
+  cloudy: 'Cloudy',
+  rainy: 'Rainy',
+  smoggy: 'Smoggy',
+  snowy: 'Snowy',
+  thunderstorm: 'Thunderstorm',
+  danger: 'Danger',
+};
 
 const pillOptionTargets = new Map([
   ['volume', volumeToggle],
   ['music', musicToggle],
+  ['weather', weatherToggle],
   ['apps', appsToggle],
   ['date', pillDate],
   ['time', pillClock],
@@ -189,6 +236,18 @@ async function refreshBatteryPercentage() {
   }
 }
 
+// main.js samples the screen around the pill: a dark backdrop gets the light glass, a light one the dark glass.
+function setBackdrop(backdrop) {
+  if (backdrop === 'dark' || backdrop === 'light') {
+    document.documentElement.dataset.backdrop = backdrop;
+  }
+}
+
+window.pillApp.onBackdrop(setBackdrop);
+window.pillApp.getBackdrop().then(setBackdrop).catch((error) => {
+  console.error('Failed to read the pill backdrop:', error);
+});
+
 window.pillApp.onBatteryPowerSource((isOnAc) => {
   batteryPowerSource = isOnAc;
   clearTimeout(batteryChargingRetryTimer);
@@ -216,7 +275,12 @@ function showNextNotification() {
     pill.classList.remove('notification-open');
     pill.classList.add('notification-closing');
     clearTimeout(notificationClosingTimer);
-    window.pillApp.setNotificationOpen(false).catch((error) => {
+    // The window shrinks once the pill has, so the shrink isn't clipped.
+    waitForPillTransition().then(() => {
+      if (!notificationOpen) {
+        return window.pillApp.setNotificationOpen(false);
+      }
+    }).catch((error) => {
       console.error('Failed to resize the pill after a notification:', error);
     });
     notificationClosingTimer = setTimeout(() => {
@@ -295,12 +359,12 @@ window.pillApp.onNotificationListenerStatus((status) => {
 });
 
 function waitForPillTransition() {
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (isMotionReduced()) {
     return Promise.resolve();
   }
 
   return new Promise((resolve) => {
-    const fallback = setTimeout(finish, 500);
+    const fallback = setTimeout(finish, transitionFallback);
 
     function finish(event) {
       if (event && (event.target !== pill || event.propertyName !== 'height')) {
@@ -317,12 +381,12 @@ function waitForPillTransition() {
 }
 
 function waitForAppsPanelTransition() {
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (isMotionReduced()) {
     return Promise.resolve();
   }
 
   return new Promise((resolve) => {
-    const fallback = setTimeout(finish, 500);
+    const fallback = setTimeout(finish, transitionFallback);
 
     function finish(event) {
       if (event && (event.target !== appsPanel || event.propertyName !== 'opacity')) {
@@ -385,6 +449,361 @@ function setMusicControlsOpen(isOpen, resizeWindow = true) {
   }
 }
 
+function formatTemperature(temperature) {
+  return Number.isFinite(temperature) ? `${temperature}°` : '--°';
+}
+
+function renderWeatherHours(hours) {
+  const temperatures = hours.map((hour) => hour.temperature).filter(Number.isFinite);
+  const lowest = Math.min(...temperatures);
+  const range = Math.max(...temperatures) - lowest || 1;
+  const hourFormat = new Intl.DateTimeFormat('en-US', { hour: 'numeric' });
+  const dayFormat = new Intl.DateTimeFormat('en-US', { weekday: 'short' });
+
+  weatherHourly.replaceChildren(...hours.map((hour, index) => {
+    const time = new Date(hour.time);
+    const item = document.createElement('div');
+    item.className = 'weather-hour';
+    item.setAttribute('role', 'listitem');
+    item.title = hour.description;
+    if (time.getHours() === 0) {
+      item.classList.add('is-new-day');
+    }
+
+    const label = document.createElement('span');
+    label.className = 'weather-hour-time';
+    if (index === 0) {
+      label.textContent = 'Now';
+    } else {
+      label.textContent = time.getHours() === 0 ? dayFormat.format(time) : hourFormat.format(time);
+    }
+    const graph = document.createElement('span');
+    graph.className = 'weather-hour-graph';
+    graph.setAttribute('aria-hidden', 'true');
+    const dot = document.createElement('span');
+    dot.className = 'weather-hour-dot';
+    if (Number.isFinite(hour.temperature)) {
+      dot.style.setProperty('--level', String((hour.temperature - lowest) / range));
+    } else {
+      dot.hidden = true;
+    }
+    graph.append(dot);
+    const temperature = document.createElement('span');
+    temperature.className = 'weather-hour-temperature';
+    temperature.textContent = formatTemperature(hour.temperature);
+    const state = document.createElement('span');
+    state.className = 'weather-hour-state';
+    state.dataset.weatherState = hour.state || '';
+    state.textContent = weatherStateNames[hour.state] || hour.description;
+    const precipitation = document.createElement('span');
+    precipitation.className = 'weather-precipitation';
+    precipitation.textContent = hour.precipitation >= 20 ? `${hour.precipitation}%` : '';
+    item.append(label, graph, temperature, state, precipitation);
+    return item;
+  }));
+}
+
+function getDayAverage(day) {
+  const temperatures = [day.high, day.low].filter(Number.isFinite);
+  return temperatures.length > 0
+    ? temperatures.reduce((sum, temperature) => sum + temperature, 0) / temperatures.length
+    : null;
+}
+
+function getTemperatureScale(values) {
+  // Picks the smallest round step that labels the range in about three marks.
+  const lowest = Math.min(...values);
+  const highest = Math.max(...values);
+  const step = [2, 5, 10, 20].find((candidate) => (highest - lowest) / candidate <= 3) || 30;
+  const min = Math.floor(lowest / step) * step;
+  let max = Math.ceil(highest / step) * step;
+  if (max === min) {
+    max += step;
+  }
+  return { min, max, step };
+}
+
+function showWeatherDayBubble(button, day) {
+  const title = document.createElement('strong');
+  title.className = 'weather-bubble-title';
+  title.textContent = day.name;
+  const conditions = document.createElement('span');
+  const stateName = weatherStateNames[day.state];
+  conditions.textContent = stateName && stateName !== day.description
+    ? `${stateName} · ${day.description}`
+    : day.description;
+  const temperatures = document.createElement('span');
+  temperatures.textContent = [
+    Number.isFinite(day.high) ? `High ${formatTemperature(day.high)}` : '',
+    Number.isFinite(day.low) ? `Low ${formatTemperature(day.low)}` : '',
+  ].filter(Boolean).join(' · ');
+  const precipitation = document.createElement('span');
+  precipitation.textContent = `${day.precipitation || 0}% chance of rain`;
+  const notices = (day.notices || []).map((notice) => {
+    const item = document.createElement('span');
+    item.className = 'weather-bubble-notice';
+    item.textContent = notice;
+    return item;
+  });
+  weatherDayBubble.replaceChildren(title, conditions, temperatures, precipitation, ...notices);
+  weatherDayBubble.hidden = false;
+
+  // Keeps the bubble inside the panel, above the dot when it fits and below it otherwise.
+  const panelRect = weatherPanel.getBoundingClientRect();
+  const dotRect = button.querySelector('.weather-week-dot').getBoundingClientRect();
+  const bubbleWidth = weatherDayBubble.offsetWidth;
+  const bubbleHeight = weatherDayBubble.offsetHeight;
+  const dotCenter = dotRect.left + dotRect.width / 2 - panelRect.left;
+  const left = Math.min(Math.max(dotCenter - bubbleWidth / 2, 4), panelRect.width - bubbleWidth - 4);
+  const above = dotRect.top - panelRect.top - bubbleHeight - 8;
+  const top = above >= 0 ? above : dotRect.bottom - panelRect.top + 8;
+  weatherDayBubble.style.left = `${left}px`;
+  weatherDayBubble.style.top = `${Math.min(top, panelRect.height - bubbleHeight)}px`;
+  // The bubble grows out of its dot, so restart the pop from that point on every hover.
+  weatherDayBubble.style.transformOrigin = `${dotCenter - left}px ${above >= 0 ? '100%' : '0%'}`;
+  weatherDayBubble.classList.remove('is-popping');
+  void weatherDayBubble.offsetWidth;
+  weatherDayBubble.classList.add('is-popping');
+  button.setAttribute('aria-describedby', 'weather-day-bubble');
+}
+
+function hideWeatherDayBubble(button) {
+  weatherDayBubble.hidden = true;
+  button.removeAttribute('aria-describedby');
+}
+
+function renderWeatherDays(days) {
+  weatherDayBubble.hidden = true;
+  const plotted = days
+    .map((day) => ({ day, average: getDayAverage(day) }))
+    .filter(({ average }) => average !== null);
+  if (plotted.length === 0) {
+    weatherDaily.replaceChildren();
+    return;
+  }
+
+  const scale = getTemperatureScale(plotted.map(({ average }) => average));
+  const getLevel = (temperature) => ((temperature - scale.min) / (scale.max - scale.min)) * 100;
+  const getPosition = (index) => ((index + 0.5) / plotted.length) * 100;
+  const weekdayFormat = new Intl.DateTimeFormat('en-US', { weekday: 'short' });
+
+  const axis = document.createElement('div');
+  axis.className = 'weather-week-axis';
+  axis.setAttribute('aria-hidden', 'true');
+  const plot = document.createElement('div');
+  plot.className = 'weather-week-plot';
+  for (let temperature = scale.min; temperature <= scale.max; temperature += scale.step) {
+    const marker = document.createElement('span');
+    marker.className = 'weather-week-marker';
+    marker.style.bottom = `${getLevel(temperature)}%`;
+    marker.textContent = formatTemperature(temperature);
+    axis.append(marker);
+    const gridline = document.createElement('span');
+    gridline.className = 'weather-week-gridline';
+    gridline.setAttribute('aria-hidden', 'true');
+    gridline.style.bottom = `${getLevel(temperature)}%`;
+    plot.append(gridline);
+  }
+
+  // The viewBox stretches to the plot, so line points use the same percentages as the dots.
+  const svgNamespace = 'http://www.w3.org/2000/svg';
+  const line = document.createElementNS(svgNamespace, 'svg');
+  line.classList.add('weather-week-line');
+  line.setAttribute('viewBox', '0 0 100 100');
+  line.setAttribute('preserveAspectRatio', 'none');
+  line.setAttribute('aria-hidden', 'true');
+  const polyline = document.createElementNS(svgNamespace, 'polyline');
+  polyline.setAttribute('points', plotted
+    .map(({ average }, index) => `${getPosition(index)},${100 - getLevel(average)}`)
+    .join(' '));
+  polyline.setAttribute('vector-effect', 'non-scaling-stroke');
+  line.append(polyline);
+  plot.append(line);
+
+  for (const [index, { day, average }] of plotted.entries()) {
+    const start = new Date(day.start);
+    const weekday = Number.isNaN(start.getTime()) ? day.name : weekdayFormat.format(start);
+    const button = document.createElement('button');
+    button.className = 'weather-week-day';
+    button.type = 'button';
+    button.setAttribute('role', 'listitem');
+    button.setAttribute('aria-label', `${day.name}: ${day.description}`);
+    button.dataset.weatherState = day.state || '';
+    if (day.notices && day.notices.length > 0) {
+      button.classList.add('has-notice');
+    }
+    button.style.left = `${getPosition(index)}%`;
+    button.style.bottom = `${getLevel(average)}%`;
+    const label = document.createElement('span');
+    label.className = 'weather-week-label';
+    label.textContent = weekday;
+    const dot = document.createElement('span');
+    dot.className = 'weather-week-dot';
+    button.append(label, dot);
+    button.addEventListener('mouseenter', () => showWeatherDayBubble(button, day));
+    button.addEventListener('focus', () => showWeatherDayBubble(button, day));
+    button.addEventListener('mouseleave', () => hideWeatherDayBubble(button));
+    button.addEventListener('blur', () => hideWeatherDayBubble(button));
+    plot.append(button);
+  }
+  weatherDaily.replaceChildren(axis, plot);
+}
+
+function renderWeather() {
+  const report = weatherReport;
+  const hasZip = report.status !== 'unset';
+  const current = report.current;
+  const stateName = current ? weatherStateNames[current.state] : undefined;
+
+  weatherToggle.textContent = stateName || 'Weather';
+  weatherToggle.setAttribute('aria-label', stateName ? `Weather: ${stateName}` : 'Weather');
+  if (current && current.state) {
+    weatherToggle.dataset.weatherState = current.state;
+  } else {
+    delete weatherToggle.dataset.weatherState;
+  }
+
+  weatherSettingsChange.textContent = hasZip ? 'Change zip' : 'Set zip';
+  weatherSettingsChange.title = hasZip ? `Current zip code: ${report.zip}` : '';
+
+  const showForm = !hasZip || editingWeatherZip;
+  weatherZipForm.hidden = !showForm;
+  weatherCurrent.hidden = showForm;
+  weatherForecasts.hidden = showForm;
+  weatherAlerts.hidden = showForm || !report.alerts || report.alerts.length === 0;
+  if (!hasZip) {
+    return;
+  }
+
+  weatherTemperature.textContent = current ? formatTemperature(current.temperature) : '--°';
+  weatherDescription.textContent = current ? current.description : '';
+  weatherLocation.textContent = [report.location.city, report.location.state].filter(Boolean).join(', ')
+    || `Zip ${report.zip}`;
+  if (report.error) {
+    weatherUpdated.textContent = report.error;
+  } else if (report.updatedAt) {
+    weatherUpdated.textContent = `Updated ${new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(report.updatedAt))}`;
+  } else {
+    weatherUpdated.textContent = 'Loading weather...';
+  }
+  weatherAlerts.textContent = report.alerts.join(' · ');
+  renderWeatherHours(report.hourly);
+  renderWeatherDays(report.daily);
+}
+
+async function submitWeatherZip(input, saveButton, status) {
+  const zip = input.value.trim();
+  if (!/^\d{5}$/.test(zip)) {
+    status.textContent = 'Enter a 5-digit zip code.';
+    return false;
+  }
+
+  input.disabled = true;
+  saveButton.disabled = true;
+  status.textContent = 'Looking up zip code...';
+  let result;
+  try {
+    result = await window.pillApp.setWeatherZip(zip);
+  } catch (error) {
+    result = { error: 'Could not save the zip code.' };
+    console.error('Failed to set weather zip code:', error);
+  }
+  input.disabled = false;
+  saveButton.disabled = false;
+
+  if (result.error) {
+    status.textContent = result.error;
+    input.focus();
+    return false;
+  }
+  status.textContent = '';
+  input.value = '';
+  weatherReport = result.report;
+  return true;
+}
+
+async function saveFirstWeatherZip() {
+  // Keeps the form up while the first forecast loads, since a saved zip would otherwise hide it.
+  editingWeatherZip = true;
+  await submitWeatherZip(weatherZipInput, weatherZipSave, weatherZipStatus);
+  editingWeatherZip = false;
+  renderWeather();
+}
+
+function setSettingsZipEditing(isEditing) {
+  weatherSettingsChange.hidden = isEditing;
+  weatherSettingsForm.hidden = !isEditing;
+  weatherSettingsStatus.textContent = '';
+  weatherSettingsInput.value = isEditing && weatherReport.zip ? weatherReport.zip : '';
+  if (isEditing) {
+    weatherSettingsInput.focus();
+    weatherSettingsInput.select();
+  }
+}
+
+async function saveSettingsWeatherZip() {
+  if (await submitWeatherZip(weatherSettingsInput, weatherSettingsSave, weatherSettingsStatus)) {
+    setSettingsZipEditing(false);
+    renderWeather();
+  }
+}
+
+async function setWeatherPanelOpen(isOpen, resizeWindow = true) {
+  if (weatherOpen === isOpen) {
+    return;
+  }
+
+  const requestId = ++weatherPanelRequestId;
+  weatherOpen = isOpen;
+  weatherToggle.setAttribute('aria-expanded', String(isOpen));
+  weatherPanel.setAttribute('aria-hidden', String(!isOpen));
+  weatherPanel.inert = !isOpen;
+  if (isOpen) {
+    pill.classList.remove('weather-closing');
+    pill.classList.add('weather-open');
+    if (resizeWindow) {
+      try {
+        await window.pillApp.setWeatherOpen(true);
+      } catch (error) {
+        console.error('Failed to open the weather panel:', error);
+      }
+    }
+    if (requestId === weatherPanelRequestId && !weatherZipForm.hidden) {
+      weatherZipInput.focus();
+    }
+    return;
+  }
+
+  pill.classList.remove('weather-open');
+  pill.classList.add('weather-closing');
+  await waitForPillTransition();
+  if (requestId !== weatherPanelRequestId) {
+    return;
+  }
+  pill.classList.remove('weather-closing');
+  if (resizeWindow && expanded) {
+    try {
+      await window.pillApp.setWeatherOpen(false);
+    } catch (error) {
+      console.error('Failed to close the weather panel:', error);
+    }
+  }
+}
+
+function switchWeatherToMusic() {
+  // Music is shorter than weather, so the window waits for the pill to shrink before resizing.
+  setWeatherPanelOpen(false, false);
+  setMusicControlsOpen(true, false);
+  waitForPillTransition().then(() => {
+    if (pill.classList.contains('music-open')) {
+      window.pillApp.setMusicOpen(true);
+    }
+  });
+}
+
 function renderLaunchableApps() {
   const query = appsSearch.value.trim().toLocaleLowerCase();
   const matchingApps = launchableApps.filter((app) => app.name.toLocaleLowerCase().includes(query));
@@ -440,6 +859,9 @@ async function setAppsPanelOpen(isOpen, resizeWindow = true) {
 
   if (isOpen && pill.classList.contains('music-open')) {
     setMusicControlsOpen(false, false);
+  }
+  if (isOpen && weatherOpen) {
+    setWeatherPanelOpen(false, false);
   }
   if (isOpen) {
     finishVolumeAdjustment();
@@ -560,9 +982,9 @@ function renderMusicSession(session) {
 }
 
 function updatePlayPauseButton(isPlaying) {
-  const playPauseIconSource = isPlaying ? 'pillicons/pause.png' : 'pillicons/play.png';
-  if (musicPlayPauseIcon.getAttribute('src') !== playPauseIconSource) {
-    musicPlayPauseIcon.src = playPauseIconSource;
+  const playPauseLabel = isPlaying ? '| |' : '>';
+  if (musicPlayPauseIcon.textContent !== playPauseLabel) {
+    musicPlayPauseIcon.textContent = playPauseLabel;
     musicPlayPauseIcon.classList.remove('is-changing');
     void musicPlayPauseIcon.offsetWidth;
     musicPlayPauseIcon.classList.add('is-changing');
@@ -642,10 +1064,16 @@ function finishVolumeAdjustment() {
   volumeSlider.disabled = true;
 }
 
+// The track is filled up to the handle, so the stylesheet needs the position as well as the value.
+function setVolumeSliderValue(volume) {
+  volumeSlider.value = String(volume);
+  volumeSlider.style.setProperty('--volume-fill', `${volumeSlider.value}%`);
+}
+
 function animateVolumeSlider(target) {
   cancelAnimationFrame(volumeSliderAnimation);
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    volumeSlider.value = String(target);
+  if (isMotionReduced()) {
+    setVolumeSliderValue(target);
     return;
   }
 
@@ -656,7 +1084,7 @@ function animateVolumeSlider(target) {
   const frame = (now) => {
     const progress = Math.min(1, (now - startTime) / duration);
     const eased = 1 - (1 - progress) ** 3;
-    volumeSlider.value = String(start + (target - start) * eased);
+    setVolumeSliderValue(start + (target - start) * eased);
     if (progress < 1) {
       volumeSliderAnimation = requestAnimationFrame(frame);
     }
@@ -683,6 +1111,9 @@ async function showVolumeFromKey({ volume, muted }) {
   }
   if (pill.classList.contains('music-open')) {
     setMusicControlsOpen(false);
+  }
+  if (weatherOpen) {
+    setWeatherPanelOpen(false);
   }
   setVolumeControlsOpen(true);
   volumeSlider.disabled = false;
@@ -727,7 +1158,7 @@ function showAppSwitcherSelection() {
   title.hidden = !title.textContent;
   entry.append(name, title);
 
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduceMotion = isMotionReduced();
   for (const previousEntry of appSwitcherTrack.querySelectorAll('.app-switcher-entry:not(.is-leaving)')) {
     if (reduceMotion) {
       previousEntry.remove();
@@ -781,12 +1212,16 @@ async function openAppSwitcher() {
   // Taller panels must finish shrinking before the window does, or the pill gets clipped.
   const shrinking = appsOpen
     || pill.classList.contains('apps-closing')
-    || pill.classList.contains('music-open');
+    || pill.classList.contains('music-open')
+    || weatherOpen;
   if (appsOpen) {
     setAppsPanelOpen(false, false);
   }
   if (pill.classList.contains('music-open')) {
     setMusicControlsOpen(false, false);
+  }
+  if (weatherOpen) {
+    setWeatherPanelOpen(false, false);
   }
   finishVolumeAdjustment();
   keyboardPinned = true;
@@ -944,6 +1379,9 @@ async function collapsePill() {
   if (appsOpen) {
     setAppsPanelOpen(false, false);
   }
+  if (weatherOpen) {
+    setWeatherPanelOpen(false, false);
+  }
 
   animating = true;
   expanded = false;
@@ -1025,7 +1463,14 @@ async function openPillSettings() {
   if (appsOpen) {
     await setAppsPanelOpen(false);
   }
+  if (weatherOpen) {
+    await setWeatherPanelOpen(false);
+  }
   finishVolumeAdjustment();
+
+  if (!weatherSettingsInput.disabled) {
+    setSettingsZipEditing(false);
+  }
 
   opening = true;
   window.pillApp.setInteractive(true);
@@ -1146,6 +1591,8 @@ pillSettingsMenu.addEventListener('click', (event) => {
     setAppsPanelOpen(false);
   } else if (key === 'volume' && pill.classList.contains('volume-adjusting')) {
     finishVolumeAdjustment();
+  } else if (key === 'weather' && weatherOpen) {
+    setWeatherPanelOpen(false);
   }
 });
 
@@ -1156,7 +1603,7 @@ document.addEventListener('keydown', (event) => {
   } else if (event.key === 'Escape' && settingsOpen) {
     event.preventDefault();
     collapsePill();
-  } else if (event.key === 'Escape' && appsOpen) {
+  } else if (event.key === 'Escape' && (appsOpen || weatherOpen)) {
     event.preventDefault();
     collapsePill();
   }
@@ -1178,11 +1625,57 @@ musicToggle.addEventListener('click', async () => {
     switchAppsToMusic();
     return;
   }
+  if (isOpen && weatherOpen) {
+    switchWeatherToMusic();
+    return;
+  }
   if (appsOpen) {
     await setAppsPanelOpen(false, false);
   }
   setVolumeControlsOpen(false);
   setMusicControlsOpen(isOpen);
+});
+
+weatherToggle.addEventListener('click', () => {
+  const isOpen = !weatherOpen;
+  if (isOpen) {
+    if (appsOpen) {
+      setAppsPanelOpen(false, false);
+    }
+    if (pill.classList.contains('music-open')) {
+      setMusicControlsOpen(false, false);
+    }
+    finishVolumeAdjustment();
+  }
+  setWeatherPanelOpen(isOpen);
+});
+weatherZipForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  saveFirstWeatherZip();
+});
+weatherSettingsForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  saveSettingsWeatherZip();
+});
+weatherSettingsChange.addEventListener('click', () => setSettingsZipEditing(true));
+weatherSettingsCancel.addEventListener('click', () => setSettingsZipEditing(false));
+weatherHourly.addEventListener('wheel', (event) => {
+  // Lets a regular mouse wheel scroll the hourly strip sideways.
+  if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+    event.preventDefault();
+    weatherHourly.scrollLeft += event.deltaY;
+  }
+}, { passive: false });
+
+window.pillApp.onWeather((report) => {
+  weatherReport = report;
+  renderWeather();
+});
+window.pillApp.getWeather().then((report) => {
+  weatherReport = report;
+  renderWeather();
+}).catch((error) => {
+  console.error('Failed to load weather:', error);
 });
 
 appsToggle.addEventListener('click', () => setAppsPanelOpen(!appsOpen));
@@ -1206,6 +1699,9 @@ volumeToggle.addEventListener('click', async () => {
   if (pill.classList.contains('music-open')) {
     setMusicControlsOpen(false);
   }
+  if (weatherOpen) {
+    setWeatherPanelOpen(false);
+  }
   setVolumeControlsOpen(isOpen);
   volumeError.textContent = '';
 
@@ -1222,7 +1718,7 @@ volumeToggle.addEventListener('click', async () => {
     }
 
     cancelAnimationFrame(volumeSliderAnimation);
-    volumeSlider.value = String(volume);
+    setVolumeSliderValue(volume);
     volumeValue.value = `${volume}%`;
     volumeSlider.disabled = false;
     volumeSlider.focus();
@@ -1236,6 +1732,7 @@ volumeToggle.addEventListener('click', async () => {
 
 volumeSlider.addEventListener('input', async () => {
   cancelAnimationFrame(volumeSliderAnimation);
+  setVolumeSliderValue(volumeSlider.value);
   const volume = Math.round(Number(volumeSlider.value));
   volumeValue.value = `${volume}%`;
   volumeError.textContent = '';

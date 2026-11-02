@@ -6,6 +6,20 @@ contextBridge.exposeInMainWorld('pillApp', {
   setSettingsOpen: (isOpen) => ipcRenderer.invoke('pill:set-settings-open', isOpen),
   setAppsOpen: (isOpen) => ipcRenderer.invoke('pill:set-apps-open', isOpen),
   setMusicOpen: (isOpen) => ipcRenderer.send('pill:set-music-open', isOpen),
+  setWeatherOpen: (isOpen) => ipcRenderer.invoke('pill:set-weather-open', isOpen),
+  getWeather: () => ipcRenderer.invoke('pill:get-weather'),
+  setWeatherZip: (zip) => ipcRenderer.invoke('pill:set-weather-zip', zip),
+  onWeather: (callback) => {
+    const listener = (_event, report) => callback(report);
+    ipcRenderer.on('pill:weather', listener);
+    return () => ipcRenderer.removeListener('pill:weather', listener);
+  },
+  getBackdrop: () => ipcRenderer.invoke('pill:get-backdrop'),
+  onBackdrop: (callback) => {
+    const listener = (_event, backdrop) => callback(backdrop);
+    ipcRenderer.on('pill:backdrop', listener);
+    return () => ipcRenderer.removeListener('pill:backdrop', listener);
+  },
   getVolume: () => ipcRenderer.invoke('pill:get-volume'),
   setVolume: (volume) => ipcRenderer.invoke('pill:set-volume', volume),
   getBatteryStatus: () => ipcRenderer.invoke('pill:get-battery-status'),

@@ -1,5 +1,5 @@
 # THE PILL  
-### Version 1.0.0  
+### Version 2.1.0  
 
 #### Description  
 The Pill is a compact desktop overlay for Windows, providing quick access to system volume, music controls, launchable apps, notifications, date, and time.

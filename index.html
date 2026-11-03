@@ -24,10 +24,6 @@
         <section class="pill-settings-menu" aria-label="Pill Settings" aria-hidden="true" inert>
           <h2 class="pill-settings-title">Pill Settings</h2>
           <div class="pill-settings-options">
-            <button class="pill-settings-option" type="button" data-pill-option="volume" aria-pressed="true">
-              <span class="pill-settings-indicator" aria-hidden="true"></span>
-              <span>Volume</span>
-            </button>
             <button class="pill-settings-option" type="button" data-pill-option="music" aria-pressed="true">
               <span class="pill-settings-indicator" aria-hidden="true"></span>
               <span>Music</span>
@@ -64,10 +60,6 @@
           </div>
         </section>
         <div class="pill-actions">
-          <button class="volume-toggle" type="button" aria-label="Volume" aria-expanded="false" aria-controls="volume-controls">
-            <img class="pill-icon pill-icon-light" src="pill-icons/Volume Light.png" alt="" draggable="false" />
-            <img class="pill-icon pill-icon-dark" src="pill-icons/Volume Dark.png" alt="" draggable="false" />
-          </button>
           <button class="music-toggle" type="button" aria-label="Music" aria-expanded="false" aria-controls="music-controls">
             <img class="pill-icon pill-icon-light" src="pill-icons/Music Light.png" alt="" draggable="false" />
             <img class="pill-icon pill-icon-dark" src="pill-icons/Music Dark.png" alt="" draggable="false" />
@@ -78,7 +70,7 @@
           </button>
         </div>
         <div class="volume-controls" id="volume-controls" aria-hidden="true" inert>
-          <input class="volume-slider" id="volume-slider" type="range" min="0" max="100" step="any" value="50" aria-label="System volume" disabled />
+          <input class="pill-slider volume-slider" id="volume-slider" type="range" min="0" max="100" step="any" value="50" aria-label="System volume" disabled />
           <output class="volume-value" for="volume-slider">--%</output>
           <span class="volume-error" role="status" aria-live="polite"></span>
         </div>
@@ -155,16 +147,95 @@
           <div class="app-switcher-track" role="status" aria-live="polite"></div>
         </section>
         <div class="pill-datetime">
-          <time class="pill-date" aria-label="Current date"></time>
-          <time class="pill-clock" aria-label="Current time"></time>
           <button class="weather-toggle" type="button" aria-label="Weather" aria-expanded="false" aria-controls="weather-panel">
             <img class="pill-icon pill-icon-light" alt="" draggable="false" />
             <img class="pill-icon pill-icon-dark" alt="" draggable="false" />
             <span class="weather-toggle-label">Weather</span>
           </button>
-          <span class="battery-percentage" aria-label="Battery charge" hidden></span>
+          <button class="center-toggle" type="button" aria-label="Pill Center" aria-expanded="false" aria-controls="pill-center">
+            <time class="pill-date" aria-label="Current date"></time>
+            <time class="pill-clock" aria-label="Current time"></time>
+            <span class="battery-percentage" aria-label="Battery charge" hidden></span>
+          </button>
         </div>
       </div>
+    </div>
+    <div class="pill-center" id="pill-center" aria-hidden="true" inert>
+      <section class="pill-center-bubble" aria-label="Pill Center" data-view="grid">
+        <div class="center-view center-grid" data-center-view="grid">
+          <button class="center-tile" type="button" data-center-action="volume">
+            <img class="pill-icon pill-icon-light" src="pill-icons/Volume Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Volume Dark.png" alt="" draggable="false" />
+            <span class="center-tile-label">Volume</span>
+          </button>
+          <button class="center-tile" type="button" data-center-action="nightlight" aria-pressed="false">
+            <img class="pill-icon pill-icon-light" src="pill-icons/Nightlight Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Nightlight Dark.png" alt="" draggable="false" />
+            <span class="center-tile-label">Night light</span>
+          </button>
+          <button class="center-tile" type="button" data-center-action="battery-saver" aria-pressed="false">
+            <img class="pill-icon pill-icon-light" src="pill-icons/Battery Saver Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Battery Saver Dark.png" alt="" draggable="false" />
+            <span class="center-tile-label">Battery saver</span>
+          </button>
+          <button class="center-tile" type="button" data-center-action="settings">
+            <img class="pill-icon pill-icon-light" src="pill-icons/Windows Settings Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Windows Settings Dark.png" alt="" draggable="false" />
+            <span class="center-tile-label">Settings</span>
+          </button>
+          <button class="center-tile" type="button" data-center-action="power">
+            <img class="pill-icon pill-icon-light" src="pill-icons/Power Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Power Dark.png" alt="" draggable="false" />
+            <span class="center-tile-label">Power</span>
+          </button>
+          <button class="center-tile" type="button" data-center-action="notifications" aria-label="Notifications">
+            <img class="pill-icon pill-icon-light" src="pill-icons/Notifications Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Notifications Dark.png" alt="" draggable="false" />
+            <span class="center-tile-label" aria-hidden="true">Notifications</span>
+            <span class="center-unread-dot" aria-hidden="true" hidden></span>
+          </button>
+        </div>
+        <div class="center-view center-volume" data-center-view="volume" aria-hidden="true" inert>
+          <button class="center-back" type="button" aria-label="Back to Pill Center">‹</button>
+          <input class="pill-slider center-volume-slider" id="center-volume-slider" type="range" min="0" max="100" step="any" value="50" aria-label="System volume" disabled />
+          <output class="center-value center-volume-value" for="center-volume-slider">--%</output>
+        </div>
+        <div class="center-view center-nightlight" data-center-view="nightlight" aria-hidden="true" inert>
+          <div class="center-header">
+            <button class="center-back" type="button" aria-label="Back to Pill Center">‹</button>
+            <h2 class="center-title">Night light</h2>
+            <button class="center-switch nightlight-switch" type="button" aria-label="Night light" aria-pressed="false" disabled>
+              <span class="pill-settings-indicator" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div class="center-slider-row">
+            <span class="center-slider-label">Intensity</span>
+            <input class="pill-slider nightlight-slider" id="nightlight-slider" type="range" min="0" max="100" step="1" value="50" aria-label="Night light intensity" disabled />
+            <output class="center-value nightlight-value" for="nightlight-slider">--%</output>
+          </div>
+          <span class="center-status nightlight-status" role="status" aria-live="polite"></span>
+        </div>
+        <div class="center-view center-power" data-center-view="power" aria-hidden="true" inert>
+          <div class="center-header">
+            <button class="center-back" type="button" aria-label="Back to Pill Center">‹</button>
+            <h2 class="center-title">Power</h2>
+          </div>
+          <div class="center-options">
+            <button class="center-option" type="button" data-power-action="lock">Lock</button>
+            <button class="center-option" type="button" data-power-action="shutdown">Shut down</button>
+            <button class="center-option" type="button" data-power-action="restart">Restart</button>
+          </div>
+        </div>
+        <div class="center-view center-notifications" data-center-view="notifications" aria-hidden="true" inert>
+          <div class="center-header">
+            <button class="center-back" type="button" aria-label="Back to Pill Center">‹</button>
+            <h2 class="center-title">Notifications</h2>
+            <button class="center-clear" type="button" disabled>Clear</button>
+          </div>
+          <div class="center-notification-list" role="list" aria-label="Recent notifications"></div>
+          <p class="center-empty">No notifications since The Pill started.</p>
+        </div>
+      </section>
     </div>
     <script src="renderer.js"></script>
   </body>

@@ -23,6 +23,8 @@ const appsExpandedSize = { width: 480, height: 360 };
 const notificationSize = { width: 480, height: 120 };
 const appSwitcherSize = { width: 480, height: 58 };
 const weatherExpandedSize = { width: 480, height: 360 };
+// The Pill Center bubble hangs below the open pill, so the window grows to fit its tallest view.
+const centerExpandedSize = { width: 480, height: 330 };
 // The pill springs a little past its size when it grows, so the window keeps clear room around it.
 const overshootMargin = { x: 12, bottom: 20 };
 const backdropMargin = 24;
@@ -56,6 +58,15 @@ let windowHelper;
 let listedWindowHandles = new Set();
 let watchingAppSwitcherRelease = false;
 const volumeKeyStep = 2;
+// Night light strength runs from 0% at 6500K to 100% at 1200K, matching the slider in Windows Settings.
+const nightLightCoolest = 6500;
+const nightLightWarmest = 1200;
+const cloudStoreHeader = Buffer.from([0x43, 0x42, 0x01, 0x00]);
+const powerActions = {
+  lock: ['rundll32.exe', ['user32.dll,LockWorkStation']],
+  shutdown: ['shutdown.exe', ['/s', '/t', '0']],
+  restart: ['shutdown.exe', ['/r', '/t', '0']],
+};
 let volumeKeyState;
 let volumeKeyStateRead;
 let volumeKeyUsedAt = 0;
@@ -450,6 +461,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32;
 
 public class PillWindowInfo {
   public long hwnd { get; set; }
@@ -481,6 +493,7 @@ public static class PillWindows {
   [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
+  [DllImport("ntdll.dll")] static extern int RtlPublishWnfStateData(ulong stateName, IntPtr typeId, byte[] buffer, int length, IntPtr explicitScope);
 
   static readonly Dictionary<string, string> AppNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -639,6 +652,38 @@ public static class PillWindows {
     double value = channel / 255.0;
     return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
   }
+
+  // Night light keeps its on state and its settings in two binary CloudStore values, which Windows watches.
+  const string NightLightKey = @"HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\default$windows.data.bluelightreduction.{0}\\windows.data.bluelightreduction.{0}";
+
+  static string GetNightLightKey(string part) {
+    if (part != "bluelightreductionstate" && part != "settings") {
+      throw new ArgumentException("Unknown night light value.");
+    }
+    return String.Format(NightLightKey, part);
+  }
+
+  public static string ReadNightLight(string part) {
+    byte[] data = Registry.GetValue(GetNightLightKey(part), "Data", null) as byte[];
+    return data == null ? null : Convert.ToBase64String(data);
+  }
+
+  public static void WriteNightLight(string part, string base64) {
+    Registry.SetValue(GetNightLightKey(part), "Data", Convert.FromBase64String(base64), RegistryValueKind.Binary);
+  }
+
+  // Energy saver has no public switch. Quick Settings publishes this undocumented WNF state (1 on, 2 off),
+  // and Windows mirrors the result into EnergySaverState, which is readable without admin rights.
+  const ulong EnergySaverStateName = 0x41C6013DA3BC3075;
+
+  public static int EnergySaver() {
+    object value = Registry.GetValue(@"HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Power", "EnergySaverState", null);
+    return value is int ? (int)value : 0;
+  }
+
+  public static bool SetEnergySaver(bool on) {
+    return RtlPublishWnfStateData(EnergySaverStateName, IntPtr.Zero, BitConverter.GetBytes(on ? 1 : 2), 4, IntPtr.Zero) == 0;
+  }
 }
 '@
 
@@ -653,6 +698,14 @@ while ($true) {
       'activate' { $result = @{ activated = [PillWindows]::Activate([long]$parts[1]) } }
       'alt' { $result = @{ altDown = [PillWindows]::IsAltDown() } }
       'backdrop' { $result = @{ luminance = [PillWindows]::Backdrop([int]$parts[1], [int]$parts[2], [int]$parts[3], [int]$parts[4], [int]$parts[5]) } }
+      'nightlight' { $result = @{ state = [PillWindows]::ReadNightLight('bluelightreductionstate'); settings = [PillWindows]::ReadNightLight('settings') } }
+      'nightlight-set' {
+        if ($parts[2] -ne '-') { [PillWindows]::WriteNightLight('settings', $parts[2]) }
+        if ($parts[1] -ne '-') { [PillWindows]::WriteNightLight('bluelightreductionstate', $parts[1]) }
+        $result = @{ written = $true }
+      }
+      'saver' { $result = @{ saver = [PillWindows]::EnergySaver() } }
+      'saver-set' { $result = @{ published = [PillWindows]::SetEnergySaver($parts[1] -eq '1') } }
       default { throw 'Unknown window helper request.' }
     }
   } catch {
@@ -731,7 +784,7 @@ function getWindowHelper() {
 
 function requestWindowHelper(command) {
   if (process.platform !== 'win32') {
-    return Promise.reject(new Error('App switching is only supported on Windows.'));
+    return Promise.reject(new Error('The Windows helper is only supported on Windows.'));
   }
 
   const helper = getWindowHelper();
@@ -793,6 +846,180 @@ async function getBackdropLuminance(bounds, margin) {
     throw new Error('Windows returned an invalid backdrop brightness.');
   }
   return luminance < 0 ? undefined : luminance;
+}
+
+function readVarint(data, start) {
+  let value = 0;
+  let scale = 1;
+  for (let index = start; index < data.length; index += 1) {
+    value += (data[index] & 0x7f) * scale;
+    scale *= 128;
+    if (data[index] < 0x80) {
+      return { value, end: index + 1 };
+    }
+  }
+  throw new Error('Windows returned night light data in an unknown format.');
+}
+
+function writeVarint(value) {
+  const bytes = [];
+  let remaining = value;
+  do {
+    const byte = remaining % 128;
+    remaining = Math.floor(remaining / 128);
+    bytes.push(remaining > 0 ? byte | 0x80 : byte);
+  } while (remaining > 0);
+  return Buffer.from(bytes);
+}
+
+// CloudStore blobs read: 43 42 01 00 0a 02 01 00 2a 06 <timestamp> 2a 2b 0e <payload size> 43 42 01 00 <payload>,
+// where the timestamp is a varint of Unix seconds.
+function parseCloudStoreBlob(base64) {
+  const data = Buffer.from(base64, 'base64');
+  const invalid = new Error('Windows returned night light data in an unknown format.');
+  if (data.length < 20 || !data.subarray(0, 4).equals(cloudStoreHeader) || data[8] !== 0x2a || data[9] !== 0x06) {
+    throw invalid;
+  }
+  const timestamp = readVarint(data, 10);
+  const sizeIndex = timestamp.end + 3;
+  if (
+    data[timestamp.end] !== 0x2a
+    || data[timestamp.end + 1] !== 0x2b
+    || data[timestamp.end + 2] !== 0x0e
+    || !(data[sizeIndex] < 0x80)
+    || !data.subarray(sizeIndex + 1, sizeIndex + 5).equals(cloudStoreHeader)
+  ) {
+    throw invalid;
+  }
+  return { data, timestamp: timestamp.value, size: data[sizeIndex], payload: data.subarray(sizeIndex + 5) };
+}
+
+function buildCloudStoreBlob(blob, payload) {
+  const size = blob.size + payload.length - blob.payload.length;
+  if (size < 0 || size >= 0x80) {
+    throw new Error('Could not build the night light change.');
+  }
+  // Windows only applies a change whose timestamp is newer than the last one.
+  const timestamp = Math.max(Math.floor(Date.now() / 1000), blob.timestamp + 1);
+  return Buffer.concat([
+    blob.data.subarray(0, 10),
+    writeVarint(timestamp),
+    Buffer.from([0x2a, 0x2b, 0x0e, size]),
+    cloudStoreHeader,
+    payload,
+  ]).toString('base64');
+}
+
+// The on state is a 10 00 field at the start of the state payload.
+function isNightLightOn(blob) {
+  return blob.payload[0] === 0x10 && blob.payload[1] === 0x00;
+}
+
+// The color temperature is a cf 28 field holding kelvin times two. Windows leaves it out until it is changed.
+function findNightLightTemperature(payload) {
+  for (let index = 0; index < payload.length - 2; index += 1) {
+    if (payload[index] === 0xcf && payload[index + 1] === 0x28) {
+      const { value, end } = readVarint(payload, index + 2);
+      return { start: index, end, kelvin: value / 2 };
+    }
+  }
+  return null;
+}
+
+async function readNightLight() {
+  const { state, settings } = await requestWindowHelper('nightlight');
+  if ((state !== null && typeof state !== 'string') || (settings !== null && typeof settings !== 'string')) {
+    throw new Error('Windows returned invalid night light data.');
+  }
+  return {
+    state: state ? parseCloudStoreBlob(state) : null,
+    settings: settings ? parseCloudStoreBlob(settings) : null,
+  };
+}
+
+async function getNightLight() {
+  const { state, settings } = await readNightLight();
+  if (!state) {
+    return { available: false, enabled: false, strength: null };
+  }
+  const temperature = settings ? findNightLightTemperature(settings.payload) : null;
+  return {
+    available: true,
+    enabled: isNightLightOn(state),
+    strength: temperature
+      ? Math.min(100, Math.max(0, Math.round(
+        ((nightLightCoolest - temperature.kelvin) / (nightLightCoolest - nightLightWarmest)) * 100,
+      )))
+      : null,
+  };
+}
+
+async function setNightLight(enabled, strength) {
+  const { state, settings } = await readNightLight();
+  let newState = '-';
+  let newSettings = '-';
+  if (typeof enabled === 'boolean') {
+    if (!state) {
+      throw new Error('Set up night light in Windows Settings first.');
+    }
+    if (isNightLightOn(state) !== enabled) {
+      newState = buildCloudStoreBlob(state, enabled
+        ? Buffer.concat([Buffer.from([0x10, 0x00]), state.payload])
+        : state.payload.subarray(2));
+    }
+  }
+  if (typeof strength === 'number') {
+    if (!settings) {
+      throw new Error('Set up night light in Windows Settings first.');
+    }
+    const kelvin = nightLightCoolest - (strength / 100) * (nightLightCoolest - nightLightWarmest);
+    const field = Buffer.concat([Buffer.from([0xcf, 0x28]), writeVarint(Math.round(kelvin) * 2)]);
+    const temperature = findNightLightTemperature(settings.payload);
+    let payload;
+    if (temperature) {
+      payload = Buffer.concat([
+        settings.payload.subarray(0, temperature.start),
+        field,
+        settings.payload.subarray(temperature.end),
+      ]);
+    } else {
+      // A missing temperature goes where Windows writes it, just before the ca 32 field.
+      const next = settings.payload.indexOf(Buffer.from([0xca, 0x32]));
+      if (next < 0) {
+        throw new Error('Windows returned night light data in an unknown format.');
+      }
+      payload = Buffer.concat([settings.payload.subarray(0, next), field, settings.payload.subarray(next)]);
+    }
+    newSettings = buildCloudStoreBlob(settings, payload);
+  }
+  if (newState !== '-' || newSettings !== '-') {
+    await requestWindowHelper(`nightlight-set ${newState} ${newSettings}`);
+  }
+}
+
+async function getBatterySaver() {
+  const { saver } = await requestWindowHelper('saver');
+  // Builds without energy saver have no EnergySaverState, so it can't be read or switched.
+  if (saver === 1 || saver === 2) {
+    return saver === 1;
+  }
+  return null;
+}
+
+async function setBatterySaver(on) {
+  const { published } = await requestWindowHelper(`saver-set ${on ? 1 : 2}`);
+  if (published !== true) {
+    throw new Error('Windows did not accept the battery saver change.');
+  }
+}
+
+function runPowerAction(action) {
+  const [file, args] = powerActions[action];
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { windowsHide: true });
+    child.once('error', reject);
+    child.once('spawn', resolve);
+  });
 }
 
 function getWeatherFilePath() {
@@ -1347,6 +1574,59 @@ function createWindow() {
     }
 
     setWindowSize(isOpen ? weatherExpandedSize : expandedSize);
+  });
+  ipcMain.handle('pill:set-center-open', (event, isOpen) => {
+    if (event.sender !== window.webContents || typeof isOpen !== 'boolean') {
+      throw new Error('Unauthorized Pill Center request');
+    }
+
+    setWindowSize(isOpen ? centerExpandedSize : expandedSize);
+  });
+  ipcMain.handle('pill:get-night-light', (event) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized night light request');
+    }
+
+    return getNightLight();
+  });
+  ipcMain.handle('pill:set-night-light', async (event, enabled, strength) => {
+    if (
+      event.sender !== window.webContents
+      || (enabled !== null && typeof enabled !== 'boolean')
+      || (strength !== null && (!Number.isInteger(strength) || strength < 0 || strength > 100))
+    ) {
+      throw new Error('Invalid night light request');
+    }
+
+    await setNightLight(enabled, strength);
+    return getNightLight();
+  });
+  ipcMain.handle('pill:get-battery-saver', (event) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized battery saver request');
+    }
+
+    return getBatterySaver();
+  });
+  ipcMain.handle('pill:set-battery-saver', (event, on) => {
+    if (event.sender !== window.webContents || typeof on !== 'boolean') {
+      throw new Error('Invalid battery saver request');
+    }
+
+    return setBatterySaver(on);
+  });
+  ipcMain.handle('pill:open-windows-settings', async (event) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized Windows Settings request');
+    }
+    await shell.openExternal('ms-settings:');
+  });
+  ipcMain.handle('pill:power-action', (event, action) => {
+    if (event.sender !== window.webContents || !Object.hasOwn(powerActions, action)) {
+      throw new Error('Invalid power request');
+    }
+
+    return runPowerAction(action);
   });
   ipcMain.handle('pill:get-weather', (event) => {
     if (event.sender !== window.webContents) {

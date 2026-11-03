@@ -3,7 +3,6 @@ const pillClock = document.querySelector('.pill-clock');
 const pillDate = document.querySelector('.pill-date');
 const batteryPercentage = document.querySelector('.battery-percentage');
 const pillSettingsMenu = document.querySelector('.pill-settings-menu');
-const volumeToggle = document.querySelector('.volume-toggle');
 const volumeControls = document.querySelector('.volume-controls');
 const volumeSlider = document.querySelector('.volume-slider');
 const volumeValue = document.querySelector('.volume-value');
@@ -53,6 +52,24 @@ const notificationTitle = document.querySelector('.notification-title');
 const notificationMessage = document.querySelector('.notification-message');
 const notificationClose = document.querySelector('.notification-close');
 const notificationSettings = document.querySelector('.notification-settings');
+const centerToggle = document.querySelector('.center-toggle');
+const pillCenter = document.querySelector('.pill-center');
+const centerBubble = document.querySelector('.pill-center-bubble');
+const centerViews = document.querySelectorAll('.center-view');
+const centerVolumeSlider = document.querySelector('.center-volume-slider');
+const centerVolumeValue = document.querySelector('.center-volume-value');
+const nightLightTile = document.querySelector('[data-center-action="nightlight"]');
+const batterySaverTile = document.querySelector('[data-center-action="battery-saver"]');
+const notificationsTile = document.querySelector('[data-center-action="notifications"]');
+const centerUnreadDot = document.querySelector('.center-unread-dot');
+const nightLightSwitch = document.querySelector('.nightlight-switch');
+const nightLightSlider = document.querySelector('.nightlight-slider');
+const nightLightValue = document.querySelector('.nightlight-value');
+const nightLightStatus = document.querySelector('.nightlight-status');
+const powerOptions = document.querySelectorAll('[data-power-action]');
+const centerNotificationList = document.querySelector('.center-notification-list');
+const centerEmpty = document.querySelector('.center-empty');
+const centerClear = document.querySelector('.center-clear');
 let expanded = false;
 let settingsOpen = false;
 let appsOpen = false;
@@ -83,11 +100,21 @@ let appSwitcherSteps = 0;
 let appSwitcherCommitRequested = false;
 let appSwitcherRequestId = 0;
 let volumeKeyTimer;
-let volumeSliderAnimation;
+const sliderAnimations = new Map();
 let weatherOpen = false;
 let weatherPanelRequestId = 0;
 let weatherReport = { status: 'unset' };
 let editingWeatherZip = false;
+let centerOpen = false;
+let centerView = 'grid';
+let centerRequestId = 0;
+let togglingBatterySaver = false;
+let nightLightChange;
+let writingNightLight = false;
+let powerConfirmTimer;
+// Notifications are only kept in memory, so the history starts empty each time The Pill does.
+let notificationHistory = [];
+let nextNotificationId = 1;
 
 // Turn this off if the stylesheet ever drops its transitions, or the waits below sit on their fallbacks.
 const motionEnabled = true;
@@ -152,7 +179,6 @@ function getWeatherIconName(state, isDaytime) {
 }
 
 const pillOptionTargets = new Map([
-  ['volume', volumeToggle],
   ['music', musicToggle],
   ['weather', weatherToggle],
   ['apps', appsToggle],
@@ -335,6 +361,8 @@ function showNextNotification() {
     return;
   }
 
+  // The toast takes over the pill, so the Pill Center bubble steps out of its way.
+  closePillCenter();
   notificationOpen = true;
   notificationApp.textContent = notification.appName || 'Windows';
   notificationTitle.textContent = notification.title || notification.appName || 'Notification';
@@ -375,7 +403,11 @@ notificationSettings.addEventListener('click', async () => {
 });
 
 window.pillApp.onNotification((notification) => {
-  enqueueNotification(notification);
+  recordNotification(notification);
+  // Someone reading the history already sees it arrive there, so it doesn't need a toast too.
+  if (!centerOpen || centerView !== 'notifications') {
+    enqueueNotification(notification);
+  }
 });
 window.pillApp.onNotificationListenerStatus((status) => {
   if (status.access === 'Allowed') {
@@ -400,7 +432,7 @@ window.pillApp.onNotificationListenerStatus((status) => {
   }
 });
 
-function waitForPillTransition() {
+function waitForTransition(element, propertyName) {
   if (isMotionReduced()) {
     return Promise.resolve();
   }
@@ -409,46 +441,31 @@ function waitForPillTransition() {
     const fallback = setTimeout(finish, transitionFallback);
 
     function finish(event) {
-      if (event && (event.target !== pill || event.propertyName !== 'height')) {
+      if (event && (event.target !== element || event.propertyName !== propertyName)) {
         return;
       }
 
       clearTimeout(fallback);
-      pill.removeEventListener('transitionend', finish);
+      element.removeEventListener('transitionend', finish);
       resolve();
     }
 
-    pill.addEventListener('transitionend', finish);
+    element.addEventListener('transitionend', finish);
   });
 }
 
+function waitForPillTransition() {
+  return waitForTransition(pill, 'height');
+}
+
 function waitForAppsPanelTransition() {
-  if (isMotionReduced()) {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => {
-    const fallback = setTimeout(finish, transitionFallback);
-
-    function finish(event) {
-      if (event && (event.target !== appsPanel || event.propertyName !== 'opacity')) {
-        return;
-      }
-
-      clearTimeout(fallback);
-      appsPanel.removeEventListener('transitionend', finish);
-      resolve();
-    }
-
-    appsPanel.addEventListener('transitionend', finish);
-  });
+  return waitForTransition(appsPanel, 'opacity');
 }
 
 function setVolumeControlsOpen(isOpen) {
   pill.classList.toggle('volume-adjusting', isOpen);
   volumeControls.setAttribute('aria-hidden', String(!isOpen));
   volumeControls.inert = !isOpen;
-  volumeToggle.setAttribute('aria-expanded', String(isOpen));
 }
 
 function setMusicControlsOpen(isOpen, resizeWindow = true) {
@@ -921,6 +938,7 @@ async function setAppsPanelOpen(isOpen, resizeWindow = true) {
     setWeatherPanelOpen(false, false);
   }
   if (isOpen) {
+    closePillCenter(false);
     finishVolumeAdjustment();
   }
 
@@ -1120,40 +1138,69 @@ function finishVolumeAdjustment() {
 }
 
 // The track is filled up to the handle, so the stylesheet needs the position as well as the value.
-function setVolumeSliderValue(volume) {
-  volumeSlider.value = String(volume);
-  volumeSlider.style.setProperty('--volume-fill', `${volumeSlider.value}%`);
+function setSliderValue(slider, value) {
+  slider.value = String(value);
+  slider.style.setProperty('--fill', `${(slider.value - slider.min) / (slider.max - slider.min) * 100}%`);
 }
 
-function animateVolumeSlider(target) {
-  cancelAnimationFrame(volumeSliderAnimation);
+function stopSliderAnimation(slider) {
+  cancelAnimationFrame(sliderAnimations.get(slider));
+}
+
+function animateSlider(slider, target) {
+  stopSliderAnimation(slider);
   if (isMotionReduced()) {
-    setVolumeSliderValue(target);
+    setSliderValue(slider, target);
     return;
   }
 
   // Retargeting from the current position keeps held keys gliding instead of restarting.
-  const start = Number(volumeSlider.value);
+  const start = Number(slider.value);
   const startTime = performance.now();
   const duration = 180;
   const frame = (now) => {
     const progress = Math.min(1, (now - startTime) / duration);
     const eased = 1 - (1 - progress) ** 3;
-    setVolumeSliderValue(start + (target - start) * eased);
+    setSliderValue(slider, start + (target - start) * eased);
     if (progress < 1) {
-      volumeSliderAnimation = requestAnimationFrame(frame);
+      sliderAnimations.set(slider, requestAnimationFrame(frame));
     }
   };
-  volumeSliderAnimation = requestAnimationFrame(frame);
+  sliderAnimations.set(slider, requestAnimationFrame(frame));
+}
+
+async function setVolumeFromSlider(slider, output) {
+  stopSliderAnimation(slider);
+  setSliderValue(slider, slider.value);
+  const volume = Math.round(Number(slider.value));
+  output.value = `${volume}%`;
+
+  try {
+    await window.pillApp.setVolume(volume);
+    return true;
+  } catch (error) {
+    console.error('Failed to set system volume:', error);
+    return false;
+  }
 }
 
 async function showVolumeFromKey({ volume, muted }) {
   const displayedVolume = muted ? 0 : volume;
-  animateVolumeSlider(displayedVolume);
+  animateSlider(volumeSlider, displayedVolume);
   volumeValue.value = `${displayedVolume}%`;
   volumeError.textContent = '';
+  animateSlider(centerVolumeSlider, displayedVolume);
+  centerVolumeValue.value = `${displayedVolume}%`;
 
   if (notificationOpen || settingsOpen || appsOpen || appSwitcherOpen) {
+    return;
+  }
+  // With the Pill Center open, the keys move its own volume slider instead of the pill's.
+  if (centerOpen) {
+    if (centerView !== 'volume') {
+      showCenterView('volume');
+    }
+    centerVolumeSlider.disabled = false;
     return;
   }
 
@@ -1268,7 +1315,9 @@ async function openAppSwitcher() {
   const shrinking = appsOpen
     || pill.classList.contains('apps-closing')
     || pill.classList.contains('music-open')
-    || weatherOpen;
+    || weatherOpen
+    || centerOpen;
+  closePillCenter(false);
   if (appsOpen) {
     setAppsPanelOpen(false, false);
   }
@@ -1437,6 +1486,7 @@ async function collapsePill() {
   if (weatherOpen) {
     setWeatherPanelOpen(false, false);
   }
+  closePillCenter(false);
 
   animating = true;
   expanded = false;
@@ -1521,6 +1571,7 @@ async function openPillSettings() {
   if (weatherOpen) {
     await setWeatherPanelOpen(false);
   }
+  closePillCenter(false);
   finishVolumeAdjustment();
 
   if (!weatherSettingsInput.disabled) {
@@ -1594,16 +1645,29 @@ pill.addEventListener('mouseenter', () => {
   }
 });
 
-pill.addEventListener('mouseleave', () => {
+pill.addEventListener('mouseleave', (event) => {
   if (notificationOpen || appSwitcherOpen) {
     return;
   }
   if (expanded) {
+    // Moving from the pill into its Pill Center bubble keeps both open.
+    if (centerOpen && pillCenter.contains(event.relatedTarget)) {
+      return;
+    }
     if (!opening && !keyboardPinned) {
       collapsePill();
     }
   } else {
     window.pillApp.setInteractive(false);
+  }
+});
+
+pillCenter.addEventListener('mouseleave', (event) => {
+  if (!centerOpen || notificationOpen || appSwitcherOpen || pill.contains(event.relatedTarget)) {
+    return;
+  }
+  if (expanded && !opening && !keyboardPinned) {
+    collapsePill();
   }
 });
 
@@ -1644,8 +1708,6 @@ pillSettingsMenu.addEventListener('click', (event) => {
     setMusicControlsOpen(false, false);
   } else if (key === 'apps' && appsOpen) {
     setAppsPanelOpen(false);
-  } else if (key === 'volume' && pill.classList.contains('volume-adjusting')) {
-    finishVolumeAdjustment();
   } else if (key === 'weather' && weatherOpen) {
     setWeatherPanelOpen(false);
   }
@@ -1655,6 +1717,15 @@ document.addEventListener('keydown', (event) => {
   if (appSwitcherOpen && (event.key === 'Escape' || event.key === 'Enter')) {
     event.preventDefault();
     closeAppSwitcher(event.key === 'Enter');
+  } else if (event.key === 'Escape' && centerOpen) {
+    // Escape steps back out of a Pill Center view before closing the bubble.
+    event.preventDefault();
+    if (centerView === 'grid') {
+      closePillCenter();
+      centerToggle.focus();
+    } else {
+      leaveCenterView();
+    }
   } else if (event.key === 'Escape' && settingsOpen) {
     event.preventDefault();
     collapsePill();
@@ -1667,7 +1738,6 @@ document.addEventListener('keydown', (event) => {
 pill.addEventListener('click', (event) => {
   if (
     pill.classList.contains('volume-adjusting')
-    && !volumeToggle.contains(event.target)
     && !volumeSlider.contains(event.target)
   ) {
     finishVolumeAdjustment();
@@ -1676,6 +1746,7 @@ pill.addEventListener('click', (event) => {
 
 musicToggle.addEventListener('click', async () => {
   const isOpen = musicToggle.getAttribute('aria-expanded') !== 'true';
+  closePillCenter(false);
   if (isOpen && (appsOpen || pill.classList.contains('apps-closing'))) {
     switchAppsToMusic();
     return;
@@ -1700,6 +1771,7 @@ weatherToggle.addEventListener('click', () => {
     if (pill.classList.contains('music-open')) {
       setMusicControlsOpen(false, false);
     }
+    closePillCenter(false);
     finishVolumeAdjustment();
   }
   setWeatherPanelOpen(isOpen);
@@ -1746,56 +1818,410 @@ musicPrevious.addEventListener('click', () => controlMusic('previous'));
 musicPlayPause.addEventListener('click', () => controlMusic('toggle'));
 musicNext.addEventListener('click', () => controlMusic('next'));
 
-volumeToggle.addEventListener('click', async () => {
-  const isOpen = !pill.classList.contains('volume-adjusting');
-  if (appsOpen) {
-    setAppsPanelOpen(false);
-  }
-  if (pill.classList.contains('music-open')) {
-    setMusicControlsOpen(false);
-  }
-  if (weatherOpen) {
-    setWeatherPanelOpen(false);
-  }
-  setVolumeControlsOpen(isOpen);
+volumeSlider.addEventListener('input', async () => {
   volumeError.textContent = '';
+  if (!(await setVolumeFromSlider(volumeSlider, volumeValue))) {
+    volumeError.textContent = 'Could not set Windows volume.';
+  }
+});
 
-  if (!isOpen) {
-    volumeSlider.disabled = true;
+function isPanelOpen() {
+  return settingsOpen || appsOpen || weatherOpen || appSwitcherOpen || pill.classList.contains('music-open');
+}
+
+// The bubble hangs under the center button, kept within the width of the pill.
+function placePillCenter() {
+  const pillRect = pill.getBoundingClientRect();
+  const buttonRect = centerToggle.getBoundingClientRect();
+  const width = pillCenter.offsetWidth;
+  const buttonCenter = buttonRect.left + buttonRect.width / 2;
+  const left = Math.min(Math.max(buttonCenter - width / 2, pillRect.left), pillRect.right - width);
+  pillCenter.style.left = `${left}px`;
+  pillCenter.style.setProperty('--center-origin', `${buttonCenter - left}px`);
+}
+
+async function openPillCenter() {
+  if (centerOpen || !expanded || settingsOpen || notificationOpen || animating || opening || appSwitcherOpen) {
     return;
   }
 
-  volumeSlider.disabled = true;
+  const requestId = ++centerRequestId;
+  // Taller panels shrink back into the pill before the bubble buds off it.
+  const shrinking = appsOpen || weatherOpen || pill.classList.contains('music-open');
+  if (appsOpen) {
+    setAppsPanelOpen(false, false);
+  }
+  if (pill.classList.contains('music-open')) {
+    setMusicControlsOpen(false, false);
+  }
+  if (weatherOpen) {
+    setWeatherPanelOpen(false, false);
+  }
+  finishVolumeAdjustment();
+  centerOpen = true;
+  centerToggle.setAttribute('aria-expanded', 'true');
+  showCenterView('grid');
+  refreshCenterTiles();
+
+  try {
+    if (shrinking) {
+      await waitForPillTransition();
+      if (requestId !== centerRequestId) {
+        return;
+      }
+    }
+    await window.pillApp.setCenterOpen(true);
+  } catch (error) {
+    console.error('Failed to open the Pill Center:', error);
+    if (requestId === centerRequestId) {
+      centerOpen = false;
+      centerToggle.setAttribute('aria-expanded', 'false');
+    }
+    return;
+  }
+  if (requestId !== centerRequestId) {
+    return;
+  }
+  placePillCenter();
+  pillCenter.classList.add('is-open');
+  pillCenter.setAttribute('aria-hidden', 'false');
+  pillCenter.inert = false;
+}
+
+// Pass false when something else is about to size the window, so the two don't fight.
+async function closePillCenter(resizeWindow = true) {
+  if (!centerOpen) {
+    return;
+  }
+
+  const requestId = ++centerRequestId;
+  centerOpen = false;
+  clearPowerConfirm();
+  centerToggle.setAttribute('aria-expanded', 'false');
+  pillCenter.classList.remove('is-open');
+  pillCenter.setAttribute('aria-hidden', 'true');
+  pillCenter.inert = true;
+  if (!resizeWindow) {
+    return;
+  }
+
+  await waitForTransition(centerBubble, 'opacity');
+  if (requestId !== centerRequestId || !expanded || isPanelOpen()) {
+    return;
+  }
+  try {
+    await window.pillApp.setCenterOpen(false);
+  } catch (error) {
+    console.error('Failed to close the Pill Center:', error);
+  }
+}
+
+function showCenterView(view) {
+  centerView = view;
+  centerBubble.dataset.view = view;
+  clearPowerConfirm();
+  for (const panel of centerViews) {
+    const isActive = panel.dataset.centerView === view;
+    panel.classList.toggle('is-active', isActive);
+    panel.setAttribute('aria-hidden', String(!isActive));
+    panel.inert = !isActive;
+  }
+}
+
+function leaveCenterView() {
+  const previousView = centerView;
+  showCenterView('grid');
+  centerBubble.querySelector(`[data-center-action="${previousView}"]`).focus();
+}
+
+async function refreshCenterTiles() {
+  const [saver, nightLight] = await Promise.allSettled([
+    window.pillApp.getBatterySaver(),
+    window.pillApp.getNightLight(),
+  ]);
+  if (saver.status === 'rejected') {
+    console.error('Failed to read battery saver:', saver.reason);
+  } else if (!togglingBatterySaver) {
+    batterySaverTile.disabled = saver.value === null;
+    batterySaverTile.title = saver.value === null ? 'Battery saver is not available on this PC.' : '';
+    batterySaverTile.setAttribute('aria-pressed', String(saver.value === true));
+  }
+  if (nightLight.status === 'rejected') {
+    console.error('Failed to read night light:', nightLight.reason);
+  } else if (!writingNightLight) {
+    renderNightLight(nightLight.value, true);
+  }
+}
+
+async function openCenterVolume() {
+  showCenterView('volume');
+  centerVolumeSlider.disabled = true;
   try {
     const volume = await window.pillApp.getVolume();
-    if (!pill.classList.contains('volume-adjusting')) {
+    if (!centerOpen || centerView !== 'volume') {
       return;
     }
-
-    cancelAnimationFrame(volumeSliderAnimation);
-    setVolumeSliderValue(volume);
-    volumeValue.value = `${volume}%`;
-    volumeSlider.disabled = false;
-    volumeSlider.focus();
+    stopSliderAnimation(centerVolumeSlider);
+    setSliderValue(centerVolumeSlider, volume);
+    centerVolumeValue.value = `${volume}%`;
+    centerVolumeSlider.disabled = false;
+    centerVolumeSlider.focus();
   } catch (error) {
-    if (pill.classList.contains('volume-adjusting')) {
-      volumeError.textContent = 'Could not read Windows volume.';
-    }
+    centerVolumeValue.value = '--%';
     console.error('Failed to read system volume:', error);
   }
-});
+}
 
-volumeSlider.addEventListener('input', async () => {
-  cancelAnimationFrame(volumeSliderAnimation);
-  setVolumeSliderValue(volumeSlider.value);
-  const volume = Math.round(Number(volumeSlider.value));
-  volumeValue.value = `${volume}%`;
-  volumeError.textContent = '';
+function renderNightLight(state, updateSlider) {
+  nightLightTile.setAttribute('aria-pressed', String(state.enabled));
+  nightLightSwitch.setAttribute('aria-pressed', String(state.enabled));
+  nightLightSwitch.disabled = !state.available;
+  nightLightSlider.disabled = !state.available || state.strength === null;
+  nightLightStatus.textContent = state.available ? '' : 'Set up night light in Windows Settings first.';
+  if (updateSlider && state.strength !== null) {
+    setSliderValue(nightLightSlider, state.strength);
+    nightLightValue.value = `${state.strength}%`;
+  }
+}
 
+async function openCenterNightLight() {
+  showCenterView('nightlight');
+  nightLightSwitch.focus();
   try {
-    await window.pillApp.setVolume(volume);
+    const state = await window.pillApp.getNightLight();
+    if (!writingNightLight) {
+      renderNightLight(state, true);
+    }
   } catch (error) {
-    volumeError.textContent = 'Could not set Windows volume.';
-    console.error('Failed to set system volume:', error);
+    nightLightStatus.textContent = 'Could not read night light.';
+    console.error('Failed to read night light:', error);
+  }
+}
+
+// Dragging the intensity slider fires faster than Windows can save, so only the latest change is written.
+async function changeNightLight(change) {
+  nightLightChange = { ...nightLightChange, ...change };
+  if (writingNightLight) {
+    return;
+  }
+
+  writingNightLight = true;
+  let state;
+  try {
+    while (nightLightChange) {
+      const { enabled = null, strength = null } = nightLightChange;
+      nightLightChange = undefined;
+      state = await window.pillApp.setNightLight(enabled, strength);
+    }
+    nightLightStatus.textContent = '';
+  } catch (error) {
+    nightLightChange = undefined;
+    nightLightStatus.textContent = 'Could not change night light.';
+    console.error('Failed to change night light:', error);
+  } finally {
+    writingNightLight = false;
+  }
+
+  if (state) {
+    renderNightLight(state, false);
+  } else {
+    refreshCenterTiles();
+  }
+}
+
+async function toggleBatterySaver() {
+  if (togglingBatterySaver) {
+    return;
+  }
+
+  const on = batterySaverTile.getAttribute('aria-pressed') !== 'true';
+  togglingBatterySaver = true;
+  batterySaverTile.setAttribute('aria-pressed', String(on));
+  try {
+    await window.pillApp.setBatterySaver(on);
+  } catch (error) {
+    batterySaverTile.setAttribute('aria-pressed', String(!on));
+    console.error('Failed to change battery saver:', error);
+  } finally {
+    togglingBatterySaver = false;
+  }
+}
+
+async function openWindowsSettings() {
+  try {
+    await window.pillApp.openWindowsSettings();
+  } catch (error) {
+    console.error('Failed to open Windows Settings:', error);
+  }
+  collapsePill();
+}
+
+const powerLabels = { lock: 'Lock', shutdown: 'Shut down', restart: 'Restart' };
+const powerConfirmLabels = { shutdown: 'Click again to shut down', restart: 'Click again to restart' };
+
+function clearPowerConfirm() {
+  clearTimeout(powerConfirmTimer);
+  for (const button of powerOptions) {
+    button.classList.remove('is-confirming');
+    button.textContent = powerLabels[button.dataset.powerAction];
+  }
+}
+
+// Shutting down and restarting can lose work, so they take a second click to confirm.
+async function choosePowerOption(button) {
+  const action = button.dataset.powerAction;
+  if (powerConfirmLabels[action] && !button.classList.contains('is-confirming')) {
+    clearPowerConfirm();
+    button.classList.add('is-confirming');
+    button.textContent = powerConfirmLabels[action];
+    powerConfirmTimer = setTimeout(clearPowerConfirm, 4000);
+    return;
+  }
+
+  clearPowerConfirm();
+  try {
+    await window.pillApp.runPowerAction(action);
+    collapsePill();
+  } catch (error) {
+    console.error(`Failed to ${action} the PC:`, error);
+  }
+}
+
+function formatNotificationTime(date) {
+  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date);
+}
+
+function createNotificationItem(entry) {
+  const item = document.createElement('div');
+  item.className = 'center-notification';
+  item.setAttribute('role', 'listitem');
+  item.classList.toggle('is-unread', !entry.read);
+  const header = document.createElement('div');
+  header.className = 'center-notification-header';
+  const app = document.createElement('span');
+  app.className = 'center-notification-app';
+  app.textContent = entry.appName || 'Windows';
+  const time = document.createElement('time');
+  time.className = 'center-notification-time';
+  time.dateTime = entry.receivedAt.toISOString();
+  time.textContent = formatNotificationTime(entry.receivedAt);
+  header.append(app, time);
+  const title = document.createElement('strong');
+  title.className = 'center-notification-title';
+  title.textContent = entry.title || entry.appName || 'Notification';
+  item.append(header, title);
+  if (entry.message) {
+    const message = document.createElement('p');
+    message.className = 'center-notification-message';
+    message.textContent = entry.message;
+    item.append(message);
+  }
+  return item;
+}
+
+function updateNotificationHistoryState() {
+  const unread = notificationHistory.some((entry) => !entry.read);
+  centerUnreadDot.hidden = !unread;
+  notificationsTile.setAttribute('aria-label', unread ? 'Notifications, unread' : 'Notifications');
+  centerEmpty.hidden = notificationHistory.length > 0;
+  centerClear.disabled = notificationHistory.length === 0;
+}
+
+// Opening the history renders unread notifications with their dots, then counts them all as read.
+function markNotificationsRead() {
+  for (const entry of notificationHistory) {
+    entry.read = true;
+  }
+  updateNotificationHistoryState();
+}
+
+function recordNotification(notification) {
+  const entry = {
+    id: nextNotificationId,
+    appName: notification.appName,
+    title: notification.title,
+    message: notification.message,
+    receivedAt: new Date(),
+    read: false,
+  };
+  nextNotificationId += 1;
+  notificationHistory.unshift(entry);
+  if (notificationHistory.length > 50) {
+    notificationHistory.length = 50;
+    centerNotificationList.lastElementChild?.remove();
+  }
+  if (centerOpen && centerView === 'notifications') {
+    centerNotificationList.prepend(createNotificationItem(entry));
+    markNotificationsRead();
+  } else {
+    updateNotificationHistoryState();
+  }
+}
+
+function openCenterNotifications() {
+  centerNotificationList.replaceChildren(...notificationHistory.map(createNotificationItem));
+  centerNotificationList.scrollTop = 0;
+  markNotificationsRead();
+  showCenterView('notifications');
+  centerBubble.querySelector('.center-notifications .center-back').focus();
+}
+
+const centerActions = {
+  volume: openCenterVolume,
+  nightlight: openCenterNightLight,
+  'battery-saver': toggleBatterySaver,
+  settings: openWindowsSettings,
+  power: () => {
+    showCenterView('power');
+    powerOptions[0].focus();
+  },
+  notifications: openCenterNotifications,
+};
+
+centerToggle.addEventListener('click', () => {
+  if (centerOpen) {
+    closePillCenter();
+  } else {
+    openPillCenter();
   }
 });
+
+centerBubble.addEventListener('click', (event) => {
+  const tile = event.target.closest('[data-center-action]');
+  const powerButton = event.target.closest('[data-power-action]');
+  if (tile) {
+    centerActions[tile.dataset.centerAction]();
+  } else if (powerButton) {
+    choosePowerOption(powerButton);
+  } else if (event.target.closest('.center-back')) {
+    leaveCenterView();
+  }
+});
+
+centerVolumeSlider.addEventListener('input', () => {
+  setVolumeFromSlider(centerVolumeSlider, centerVolumeValue);
+});
+
+nightLightSwitch.addEventListener('click', () => {
+  const enabled = nightLightSwitch.getAttribute('aria-pressed') !== 'true';
+  nightLightSwitch.setAttribute('aria-pressed', String(enabled));
+  nightLightTile.setAttribute('aria-pressed', String(enabled));
+  changeNightLight({ enabled });
+});
+
+nightLightSlider.addEventListener('input', () => {
+  setSliderValue(nightLightSlider, nightLightSlider.value);
+  const strength = Math.round(Number(nightLightSlider.value));
+  nightLightValue.value = `${strength}%`;
+  changeNightLight({ strength });
+});
+
+centerClear.addEventListener('click', () => {
+  notificationHistory = [];
+  centerNotificationList.replaceChildren();
+  updateNotificationHistoryState();
+  centerBubble.querySelector('.center-notifications .center-back').focus();
+});
+
+showCenterView('grid');
+updateNotificationHistoryState();

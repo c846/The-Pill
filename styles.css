@@ -25,6 +25,14 @@
   the pill heights below must match the window sizes there (collapsed 8, expanded 42, app
   switcher 58, notification 120, music 240, settings 330, apps 360, weather 360). main.js adds
   clear room around each size so the springs can overshoot without being clipped.
+
+  The Pill Center is a separate glass bubble (.pill-center) that hangs under the open pill, outside
+  it, so the window grows to 330 while it is open. Its tallest view must end above that: the bubble
+  starts at 50 (the 42 pill plus an 8 gap), and the notifications view is 270 tall.
+  States on .pill-center: is-open. On .pill-center-bubble: data-view="grid|volume|nightlight|power|
+  notifications". On children: .center-view.is-active, .center-tile[aria-pressed],
+  .center-option.is-confirming, .center-notification.is-unread.
+  renderer.js waits on an opacity transition on .pill-center-bubble before shrinking the window.
 */
 
 /* ---------- Theme ---------- */
@@ -151,11 +159,14 @@ input::placeholder {
   color: var(--pill-fg);
   text-shadow: var(--pill-text-shadow);
   translate: -50% 0;
+  /* Sits above the Pill Center, whose bubble buds out from underneath it. */
+  z-index: 1;
 }
 
 /* The gradient rim: a 1px ring masked out of a full gradient, so it can follow the rounded corners.
-   Only the pill itself is glass. Everything inside it is a flat smoky pane with no rim or sheen. */
-.pill::after {
+   Only the pill and the Pill Center bubble are glass. Everything inside them is a flat smoky pane. */
+.pill::after,
+.pill-center-bubble::after {
   position: absolute;
   inset: 0;
   z-index: 3;
@@ -172,7 +183,8 @@ input::placeholder {
 /* Refraction: content passing near the edge of the glass blurs, as if seen through its thick rim.
    A blurred copy of what is underneath fades in toward the edges. It only reaches the pill's own
    content, since the desktop behind the window can't be blurred. */
-.pill {
+.pill,
+.pill-center-bubble {
   --refraction-depth: 7px;
   --refraction-core: 2px;
   --refraction-top: 7px;
@@ -189,12 +201,14 @@ input::placeholder {
   --refraction-core: 3px;
 }
 
-.pill.notification-open {
+.pill.notification-open,
+.pill-center-bubble[data-view="notifications"] {
   --refraction-depth: 12px;
   --refraction-core: 3px;
 }
 
-.pill::before {
+.pill::before,
+.pill-center-bubble::before {
   position: absolute;
   inset: 0;
   z-index: 2;
@@ -339,7 +353,7 @@ input::placeholder {
   height: 28px;
 }
 
-.volume-toggle,
+.center-toggle,
 .music-toggle,
 .weather-toggle,
 .apps-toggle {
@@ -353,21 +367,43 @@ input::placeholder {
   cursor: pointer;
 }
 
-.volume-toggle[aria-expanded="true"]::before,
+.center-toggle[aria-expanded="true"]::before,
 .music-toggle[aria-expanded="true"]::before,
 .weather-toggle[aria-expanded="true"]::before,
 .apps-toggle[aria-expanded="true"]::before {
   background: var(--surface-strong);
 }
 
-.volume-toggle,
 .music-toggle,
 .weather-toggle {
   justify-content: center;
   font-size: 12px;
 }
 
-/* The weather button sits between the time and battery and sizes to its icon, or its word before the forecast loads. */
+/* The date, time and battery share one button, which opens the Pill Center. */
+.center-toggle {
+  flex: 0 0 auto;
+  justify-content: center;
+  height: 28px;
+  min-width: 36px;
+  gap: 10px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* With the date, time and battery all turned off, the button shows a tiny pill so it can still be found. */
+.center-toggle:not(:has(> :not(.pill-option-disabled):not([hidden])))::after {
+  width: 14px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+}
+
+/* The weather button sits left of the date and sizes to its icon, or its word before the forecast loads. */
 .pill-datetime .weather-toggle {
   flex: 0 0 auto;
   height: 28px;
@@ -407,11 +443,11 @@ input::placeholder {
   display: none;
 }
 
-.volume-toggle:focus-visible,
+.center-toggle:focus-visible,
 .music-toggle:focus-visible,
 .weather-toggle:focus-visible,
 .apps-toggle:focus-visible,
-.volume-slider:focus-visible {
+.pill-slider:focus-visible {
   outline: 2px solid var(--pill-fg-soft);
   outline-offset: 1px;
 }
@@ -422,7 +458,7 @@ input::placeholder {
   right: 6px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 2px;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -462,14 +498,21 @@ input::placeholder {
   width: 0;
 }
 
-.pill-datetime > :not(.pill-option-disabled) {
+.pill-datetime > .weather-toggle:not(.pill-option-disabled),
+.center-toggle > :not(.pill-option-disabled) {
   max-width: 110px;
 }
 
-.pill-datetime > .pill-option-disabled {
+.pill-datetime > .pill-option-disabled,
+.center-toggle > .pill-option-disabled {
   flex: 0 0 0;
   max-width: 0;
   overflow: hidden;
+}
+
+/* Cancels the gap a hidden item would still leave inside the center button. */
+.center-toggle > .pill-option-disabled {
+  margin-left: -10px;
 }
 
 /* ---------- Notification ---------- */
@@ -701,12 +744,14 @@ input::placeholder {
   content: "";
 }
 
-.pill-settings-option[aria-pressed="true"] .pill-settings-indicator {
+.pill-settings-option[aria-pressed="true"] .pill-settings-indicator,
+.center-switch[aria-pressed="true"] .pill-settings-indicator {
   border-color: transparent;
   background: var(--knob);
 }
 
-.pill-settings-option[aria-pressed="true"] .pill-settings-indicator::after {
+.pill-settings-option[aria-pressed="true"] .pill-settings-indicator::after,
+.center-switch[aria-pressed="true"] .pill-settings-indicator::after {
   left: 14px;
   background: var(--knob-contrast);
 }
@@ -768,36 +813,37 @@ input::placeholder {
   visibility: visible;
 }
 
-.volume-slider {
-  width: min(250px, 100%);
+/* Sliders share one look: the pill's volume overlay plus the Pill Center's volume and night light. */
+.pill-slider {
+  --fill: 50%;
   height: 20px;
   appearance: none;
+  border-radius: 999px;
   background: transparent;
   cursor: pointer;
 }
 
 .volume-slider {
-  --volume-fill: 50%;
-  border-radius: 999px;
+  width: min(250px, 100%);
 }
 
-.volume-slider::-webkit-slider-runnable-track {
+.pill-slider::-webkit-slider-runnable-track {
   height: 6px;
   border: 1px solid transparent;
   border-radius: 999px;
-  background: linear-gradient(to right, var(--knob-track) var(--volume-fill), var(--knob-track-empty) var(--volume-fill));
+  background: linear-gradient(to right, var(--knob-track) var(--fill), var(--knob-track-empty) var(--fill));
   /* Size the fill to the border box too, or the gradient repeats into the right border and shows a sliver of fill. */
   background-origin: border-box;
 }
 
-.volume-slider::-moz-range-track {
+.pill-slider::-moz-range-track {
   height: 6px;
   border: 1px solid transparent;
   border-radius: 999px;
   background: var(--knob-track-empty);
 }
 
-.volume-slider::-moz-range-progress {
+.pill-slider::-moz-range-progress {
   height: 6px;
   border-radius: 999px;
   background: var(--knob-track);
@@ -805,7 +851,7 @@ input::placeholder {
 
 /* The ring drawn by the shadow makes the handle 1.5px wider than its travel, so it fully covers
    the rounded tips of the track at either end instead of leaving a sliver of the fill showing. */
-.volume-slider::-webkit-slider-thumb {
+.pill-slider::-webkit-slider-thumb {
   width: 14px;
   height: 14px;
   margin-top: -5px;
@@ -816,7 +862,7 @@ input::placeholder {
   box-shadow: 0 0 0 1.5px var(--knob), var(--knob-shadow);
 }
 
-.volume-slider::-moz-range-thumb {
+.pill-slider::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border: 0;
@@ -825,7 +871,7 @@ input::placeholder {
   box-shadow: 0 0 0 1.5px var(--knob);
 }
 
-.volume-slider:disabled {
+.pill-slider:disabled {
   cursor: wait;
 }
 
@@ -1646,14 +1692,393 @@ input::placeholder {
   line-height: 1.3;
 }
 
+/* ---------- Pill Center ---------- */
+/*
+  A small glass bubble that hangs under the center button while the pill stays open. The wrapper
+  reaches up behind the lower half of the pill (which sits above it) and across the gap, so the
+  pointer can travel between the two without leaving either. renderer.js sets its left and
+  --center-origin, the button's center within the bubble.
+*/
+
+.pill-center {
+  position: fixed;
+  top: 22px;
+  left: 0;
+  z-index: 0;
+  width: 240px;
+  padding-top: 28px;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.pill-center.is-open {
+  pointer-events: auto;
+  visibility: visible;
+}
+
+.pill-center-bubble {
+  position: relative;
+  overflow: hidden;
+  border-radius: 22px;
+  background-image: var(--glass-sheen), var(--glass-tint);
+  box-shadow: var(--glass-inner-shadow);
+  color: var(--pill-fg);
+  font-size: 12px;
+  text-shadow: var(--pill-text-shadow);
+}
+
+/* Each view keeps its own height while the bubble springs between them, so nothing reflows mid-move. */
+.pill-center-bubble[data-view="grid"],
+.center-grid {
+  height: 136px;
+}
+
+.pill-center-bubble[data-view="volume"],
+.center-volume {
+  height: 48px;
+}
+
+.pill-center-bubble[data-view="nightlight"],
+.center-nightlight {
+  height: 104px;
+}
+
+.pill-center-bubble[data-view="power"],
+.center-power {
+  height: 152px;
+}
+
+.pill-center-bubble[data-view="notifications"],
+.center-notifications {
+  height: 270px;
+}
+
+.pill-center-bubble[data-view="volume"] {
+  border-radius: 24px;
+}
+
+.center-view {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 8px;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.center-view.is-active {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+}
+
+.center-view [hidden] {
+  display: none;
+}
+
+/* Grid of tiles */
+.center-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  gap: 4px;
+}
+
+.center-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  gap: 6px;
+  padding: 6px 2px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.center-tile-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.center-tile:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* The light that shows there are unread notifications sits at the top right of the bell. */
+.center-unread-dot {
+  position: absolute;
+  top: 7px;
+  right: calc(50% - 15px);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: 0 0 6px var(--knob), var(--knob-shadow);
+}
+
+/* Headers, back buttons and switches */
+.center-header {
+  display: flex;
+  flex: 0 0 28px;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+}
+
+.center-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.center-back {
+  display: inline-flex;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0 0 2px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.center-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.center-switch:disabled,
+.center-clear:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.center-value {
+  flex: 0 0 34px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Volume */
+.center-volume {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 10px;
+}
+
+.center-volume .pill-slider,
+.center-slider-row .pill-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Night light */
+.center-slider-row {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 4px 0 8px;
+}
+
+.center-slider-label {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.center-status {
+  min-height: 13px;
+  padding: 6px 8px 0;
+  font-size: 10px;
+}
+
+.center-slider-label,
+.center-status,
+.center-notification-header,
+.center-empty {
+  color: var(--pill-fg-soft);
+}
+
+/* Power */
+.center-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.center-option {
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.center-option.is-confirming {
+  font-weight: 600;
+}
+
+/* Notification history */
+.center-notifications {
+  gap: 4px;
+}
+
+.center-clear {
+  flex: 0 0 auto;
+  margin-right: 2px;
+  padding: 3px 11px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.center-clear:hover:not(:disabled) {
+  background: var(--surface-strong);
+}
+
+.center-notification-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  gap: 2px;
+  overflow-y: auto;
+  padding-bottom: 6px;
+  scrollbar-color: var(--pill-fg-faint) transparent;
+  scrollbar-width: thin;
+}
+
+.center-notification {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+  padding: 7px 10px 8px 14px;
+  border-radius: 12px;
+}
+
+/* Notifications that were unread when the history opened keep a small light beside them. */
+.center-notification.is-unread::before {
+  position: absolute;
+  top: 12px;
+  left: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: 0 0 5px var(--knob);
+  content: "";
+}
+
+.center-notification-header {
+  display: flex;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+  font-size: 10px;
+}
+
+.center-notification-app,
+.center-notification-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.center-notification-app {
+  font-weight: 600;
+}
+
+.center-notification-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.center-notification-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.center-notification-message {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.center-empty {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0 16px 20px;
+  font-size: 11px;
+  text-align: center;
+}
+
+.center-tile:focus-visible,
+.center-option:focus-visible {
+  outline: 2px solid var(--pill-fg-soft);
+  outline-offset: -2px;
+}
+
+.center-back:focus-visible,
+.center-switch:focus-visible,
+.center-clear:focus-visible {
+  outline: 2px solid var(--pill-fg-soft);
+  outline-offset: 1px;
+}
+
 /* ---------- Text on panes ---------- */
 /* Panes are nearly solid white or black, so anything on them flips to the opposite text and knob colors. */
 
-.volume-toggle:hover,
+.center-toggle:hover,
 .music-toggle:hover,
 .weather-toggle:hover,
 .apps-toggle:hover,
-.volume-toggle[aria-expanded="true"],
+.center-toggle[aria-expanded="true"],
 .music-toggle[aria-expanded="true"],
 .weather-toggle[aria-expanded="true"],
 .apps-toggle[aria-expanded="true"],
@@ -1668,6 +2093,13 @@ input::placeholder {
 .weather-settings-cancel,
 .notification-settings,
 .notification-close:hover,
+.center-tile:hover:not(:disabled),
+.center-tile[aria-pressed="true"],
+.center-back:hover,
+.center-switch:hover:not(:disabled),
+.center-option:hover,
+.center-option.is-confirming,
+.center-clear,
 .music-actions button:hover:not(:disabled),
 .music-actions .music-play-pause,
 .music-artwork-wrap,
@@ -1801,7 +2233,7 @@ input::placeholder {
   scale: 0.94;
 }
 
-.volume-toggle,
+.center-toggle,
 .music-toggle,
 .weather-toggle,
 .apps-toggle {
@@ -1817,7 +2249,7 @@ input::placeholder {
     visibility 260ms;
 }
 
-.volume-toggle:active,
+.center-toggle:active,
 .music-toggle:active,
 .weather-toggle:active,
 .apps-toggle:active {
@@ -1825,15 +2257,16 @@ input::placeholder {
 }
 
 /* Options turned off in Pill Settings drain away instead of vanishing. The weather button has its own transitions above. */
-.pill-datetime > :not(.weather-toggle) {
+.center-toggle > * {
   transition:
     max-width var(--flow-time) var(--ease-flow),
+    margin var(--flow-time) var(--ease-flow),
     opacity 260ms var(--ease-smoke),
     visibility 260ms;
 }
 
 /* Smoky highlights sit on a ::before so they can drift in and out without moving the text. */
-.volume-toggle,
+.center-toggle,
 .music-toggle,
 .weather-toggle,
 .apps-toggle,
@@ -1842,12 +2275,16 @@ input::placeholder {
 .music-previous,
 .music-next,
 .notification-close,
-.weather-hour {
+.weather-hour,
+.center-tile,
+.center-back,
+.center-switch,
+.center-option {
   position: relative;
   isolation: isolate;
 }
 
-.volume-toggle::before,
+.center-toggle::before,
 .music-toggle::before,
 .weather-toggle::before,
 .apps-toggle::before,
@@ -1856,7 +2293,11 @@ input::placeholder {
 .music-previous::before,
 .music-next::before,
 .notification-close::before,
-.weather-hour::before {
+.weather-hour::before,
+.center-tile::before,
+.center-back::before,
+.center-switch::before,
+.center-option::before {
   position: absolute;
   inset: 0;
   z-index: -1;
@@ -1874,11 +2315,11 @@ input::placeholder {
     background-color var(--smoke-time) var(--ease-smoke);
 }
 
-.volume-toggle:hover::before,
+.center-toggle:hover::before,
 .music-toggle:hover::before,
 .weather-toggle:hover::before,
 .apps-toggle:hover::before,
-.volume-toggle[aria-expanded="true"]::before,
+.center-toggle[aria-expanded="true"]::before,
 .music-toggle[aria-expanded="true"]::before,
 .weather-toggle[aria-expanded="true"]::before,
 .apps-toggle[aria-expanded="true"]::before,
@@ -1887,7 +2328,13 @@ input::placeholder {
 .music-previous:hover:not(:disabled)::before,
 .music-next:hover:not(:disabled)::before,
 .notification-close:hover::before,
-.weather-hour:hover::before {
+.weather-hour:hover::before,
+.center-tile:hover:not(:disabled)::before,
+.center-tile[aria-pressed="true"]::before,
+.center-back:hover::before,
+.center-switch:hover:not(:disabled)::before,
+.center-option:hover::before,
+.center-option.is-confirming::before {
   opacity: 1;
   filter: none;
   scale: 1;
@@ -1898,8 +2345,17 @@ input::placeholder {
 .music-previous,
 .music-next,
 .notification-close,
-.weather-hour {
+.weather-hour,
+.center-back,
+.center-switch,
+.center-option {
   transition: color var(--smoke-time) var(--ease-smoke);
+}
+
+/* Switched-on tiles and a power option waiting for its second click get the stronger pane. */
+.center-tile[aria-pressed="true"]::before,
+.center-option.is-confirming::before {
+  background: var(--surface-strong);
 }
 
 .weather-hour {
@@ -1914,6 +2370,7 @@ input::placeholder {
 .weather-settings-save,
 .weather-settings-cancel,
 .notification-settings,
+.center-clear,
 .music-actions .music-play-pause {
   transition:
     background-color var(--smoke-time) var(--ease-smoke),
@@ -1981,15 +2438,15 @@ input::placeholder {
     scale var(--flow-time) var(--ease-flow) 40ms;
 }
 
-.volume-slider::-webkit-slider-thumb {
+.pill-slider::-webkit-slider-thumb {
   transition: transform var(--pop-time) var(--ease-pop);
 }
 
-.volume-slider:hover:not(:disabled)::-webkit-slider-thumb {
+.pill-slider:hover:not(:disabled)::-webkit-slider-thumb {
   transform: scale(1.18);
 }
 
-.volume-slider:active:not(:disabled)::-webkit-slider-thumb {
+.pill-slider:active:not(:disabled)::-webkit-slider-thumb {
   transform: scale(1.3);
 }
 
@@ -2290,6 +2747,119 @@ input::placeholder {
 
 .battery-percentage.is-charging {
   animation: breathe 2.6s ease-in-out infinite;
+}
+
+/* Pill Center: the bubble buds off the underside of the pill like a drop, popping out from under
+   the button with the lively spring, and draws back up into it like smoke when it closes. */
+.pill-center {
+  transition: visibility var(--smoke-time);
+}
+
+.pill-center.is-open {
+  transition: visibility 0s;
+}
+
+.pill-center-bubble {
+  opacity: 0;
+  filter: blur(6px);
+  /* Starting wider than tall keeps the sideways overshoot inside the window's 12px of clear room. */
+  scale: 0.5 0.15;
+  transform-origin: var(--center-origin, 50%) 0;
+  translate: 0 -18px;
+  transition:
+    opacity var(--smoke-time) var(--ease-smoke),
+    filter var(--smoke-time) var(--ease-smoke),
+    scale var(--smoke-time) var(--ease-smoke),
+    translate var(--smoke-time) var(--ease-smoke),
+    height var(--flow-time) var(--ease-flow),
+    border-radius var(--flow-time) var(--ease-flow);
+}
+
+.pill-center.is-open .pill-center-bubble {
+  opacity: 1;
+  filter: none;
+  scale: 1;
+  translate: none;
+  transition:
+    opacity 220ms var(--ease-smoke),
+    filter 300ms var(--ease-smoke),
+    scale var(--pop-time) var(--ease-pop),
+    translate var(--pop-time) var(--ease-pop),
+    height var(--flow-time) var(--ease-flow),
+    border-radius var(--flow-time) var(--ease-flow);
+}
+
+/* Views trade places like the pill's panels: the old one drifts off as the new one flows in. */
+.center-view {
+  filter: blur(4px);
+  translate: 0 6px;
+  transition:
+    opacity 200ms var(--ease-smoke),
+    filter 200ms var(--ease-smoke),
+    translate 200ms var(--ease-smoke),
+    visibility 200ms;
+}
+
+.center-view.is-active {
+  filter: none;
+  translate: none;
+  transition:
+    opacity 320ms var(--ease-smoke) 120ms,
+    filter 320ms var(--ease-smoke) 120ms,
+    translate var(--flow-time) var(--ease-flow) 80ms,
+    visibility 0s;
+}
+
+.pill-center.is-open .center-tile {
+  animation: rise 420ms var(--ease-flow) backwards;
+  animation-delay: calc(sibling-index() * 35ms + 60ms);
+}
+
+.center-tile {
+  transition:
+    color var(--smoke-time) var(--ease-smoke),
+    opacity var(--smoke-time) var(--ease-smoke),
+    scale var(--pop-time) var(--ease-pop);
+}
+
+.center-tile:active:not(:disabled),
+.center-back:active,
+.center-option:active {
+  scale: 0.92;
+}
+
+.center-back,
+.center-option {
+  transition:
+    color var(--smoke-time) var(--ease-smoke),
+    scale var(--pop-time) var(--ease-pop);
+}
+
+.center-tile .pill-icon {
+  transition: scale var(--pop-time) var(--ease-pop);
+}
+
+.center-tile:hover:not(:disabled) .pill-icon {
+  scale: 1.1;
+}
+
+/* The unread light drops in, then glows softly like the charging battery. */
+.center-unread-dot {
+  animation:
+    drop-in var(--pop-time) var(--ease-pop) both,
+    breathe 2.6s ease-in-out var(--pop-time) infinite;
+}
+
+.center-option.is-confirming {
+  animation: smoke-in 300ms var(--ease-smoke);
+}
+
+.center-notification {
+  animation:
+    refract-block linear both,
+    rise 420ms var(--ease-flow) backwards;
+  animation-timeline: view(block), auto;
+  animation-delay: 0s, calc(min(sibling-index(), 10) * 30ms);
 }
 
 /* renderer.js also stops waiting on motion when this is set. */

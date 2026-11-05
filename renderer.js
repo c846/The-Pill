@@ -47,6 +47,8 @@ const musicPrevious = document.querySelector('.music-previous');
 const musicPlayPause = document.querySelector('.music-play-pause');
 const musicPlayPauseIcon = document.querySelector('.music-play-pause-icon');
 const musicNext = document.querySelector('.music-next');
+const musicSeekSlider = document.querySelector('.music-seek-slider');
+const musicTime = document.querySelector('.music-time');
 const notificationToast = document.querySelector('.notification-toast');
 const notificationApp = document.querySelector('.notification-app');
 const notificationTitle = document.querySelector('.notification-title');
@@ -82,6 +84,12 @@ let musicRefreshTimer;
 let refreshingMusic = false;
 let controllingMusic = false;
 let currentMediaSession;
+let musicTimelineTimer;
+let musicTimeline;
+let musicSeekHeld = false;
+let musicSeekTarget;
+let musicSeekRunning = false;
+let musicSeekSettleTime = 0;
 let notificationTimer;
 let notificationClosingTimer;
 let batteryPowerSource;
@@ -102,6 +110,7 @@ let appSwitcherCommitRequested = false;
 let appSwitcherRequestId = 0;
 let volumeKeyTimer;
 const sliderAnimations = new Map();
+const musicSeekSettleDelay = 2500;
 let weatherOpen = false;
 let weatherPanelRequestId = 0;
 let weatherReport = { status: 'unset' };
@@ -484,6 +493,7 @@ function setMusicControlsOpen(isOpen, resizeWindow = true) {
   if (isOpen) {
     refreshMusicSession();
     musicRefreshTimer = setInterval(refreshMusicSession, 2000);
+    musicTimelineTimer = setInterval(showMusicTimeline, 250);
     if (resizeWindow) {
       window.pillApp.setMusicOpen(true);
     }
@@ -495,6 +505,9 @@ function setMusicControlsOpen(isOpen, resizeWindow = true) {
   } else {
     clearInterval(musicRefreshTimer);
     musicRefreshTimer = undefined;
+    clearInterval(musicTimelineTimer);
+    musicTimelineTimer = undefined;
+    musicSeekHeld = false;
     if (resizeWindow) {
       waitForPillTransition().then(() => {
         if (
@@ -1059,6 +1072,99 @@ function renderMusicSession(session) {
   if (!controllingMusic) {
     updatePlayPauseButton(isPlaying);
   }
+  updateMusicTimeline(session);
+}
+
+function formatMusicTime(seconds) {
+  const total = Math.floor(seconds);
+  const minutes = Math.floor(total / 60);
+  const clock = `${minutes % 60}:${String(total % 60).padStart(2, '0')}`;
+  return minutes >= 60
+    ? `${Math.floor(minutes / 60)}:${clock.padStart(5, '0')}`
+    : clock;
+}
+
+// Windows reports where the track was at a moment in the past, so the position is worked out from that.
+function getMusicPosition() {
+  const { position, updatedAt, rate, duration } = musicTimeline;
+  const elapsed = rate * (Date.now() - updatedAt) / 1000;
+  return Math.min(duration, Math.max(0, position + elapsed));
+}
+
+function updateMusicTimeline(session) {
+  const duration = session && session.available ? session.duration : 0;
+  if (!(duration > 0)) {
+    musicTimeline = undefined;
+    musicSeekSlider.disabled = true;
+    showMusicTimeline();
+    return;
+  }
+
+  const rate = session.playbackStatus === 'Playing' ? session.playbackRate || 1 : 0;
+  // Players take a moment to report a seek, and until then they still report the old position.
+  if (musicTimeline && Date.now() < musicSeekSettleTime) {
+    musicTimeline = { ...musicTimeline, position: getMusicPosition(), updatedAt: Date.now(), rate, duration };
+  } else {
+    musicTimeline = {
+      position: session.position,
+      updatedAt: session.positionUpdatedAt > 0 ? session.positionUpdatedAt : Date.now(),
+      rate,
+      duration,
+    };
+  }
+  musicSeekSlider.disabled = !session.sessionId || !session.canSeek;
+  showMusicTimeline();
+}
+
+function showMusicTimeline() {
+  if (musicSeekHeld) {
+    return;
+  }
+
+  if (!musicTimeline) {
+    musicSeekSlider.max = 1;
+    setSliderValue(musicSeekSlider, 0);
+    musicTime.value = '--:-- / --:--';
+    return;
+  }
+
+  musicSeekSlider.max = musicTimeline.duration;
+  setSliderValue(musicSeekSlider, getMusicPosition());
+  showMusicTime(Number(musicSeekSlider.value));
+}
+
+function showMusicTime(position) {
+  const time = formatMusicTime(position);
+  musicTime.value = `${time} / ${formatMusicTime(musicSeekSlider.max)}`;
+  musicSeekSlider.setAttribute('aria-valuetext', time);
+}
+
+// A seek takes longer than a drag or a held key, so only the newest position is sent once one finishes.
+async function seekMusic(position) {
+  musicSeekTarget = position;
+  musicTimeline = { ...musicTimeline, position, updatedAt: Date.now() };
+  musicSeekSettleTime = Date.now() + musicSeekSettleDelay;
+  if (musicSeekRunning) {
+    return;
+  }
+
+  musicSeekRunning = true;
+  try {
+    while (musicSeekTarget !== undefined && currentMediaSession) {
+      const target = musicSeekTarget;
+      musicSeekTarget = undefined;
+      await window.pillApp.controlMediaSession(currentMediaSession.sessionId, 'seek', target);
+      musicSeekSettleTime = Date.now() + musicSeekSettleDelay;
+    }
+  } catch (error) {
+    musicSeekSettleTime = 0;
+    await refreshMusicSession();
+    musicStatus.textContent = 'Could not change the track position.';
+    console.error('Failed to seek Windows media session:', error);
+  } finally {
+    musicSeekTarget = undefined;
+    musicSeekRunning = false;
+  }
 }
 
 function updatePlayPauseButton(isPlaying) {
@@ -1086,6 +1192,7 @@ async function refreshMusicSession() {
     for (const button of [musicPrevious, musicPlayPause, musicNext]) {
       button.disabled = true;
     }
+    updateMusicTimeline();
     musicStatus.textContent = 'Could not read Windows media session.';
     console.error('Failed to read Windows media session:', error);
   } finally {
@@ -1116,6 +1223,7 @@ async function controlMusic(action) {
   for (const button of [musicPrevious, musicPlayPause, musicNext]) {
     button.disabled = true;
   }
+  musicSeekSettleTime = 0;
   controllingMusic = true;
   musicStatus.textContent = 'Updating player...';
   try {
@@ -1844,6 +1952,30 @@ appsList.addEventListener('click', (event) => {
 musicPrevious.addEventListener('click', () => controlMusic('previous'));
 musicPlayPause.addEventListener('click', () => controlMusic('toggle'));
 musicNext.addEventListener('click', () => controlMusic('next'));
+
+// While the handle is held the slider shows where the track will land, not where it is.
+musicSeekSlider.addEventListener('pointerdown', () => {
+  musicSeekHeld = true;
+});
+
+window.addEventListener('pointerup', () => {
+  musicSeekHeld = false;
+});
+
+window.addEventListener('pointercancel', () => {
+  musicSeekHeld = false;
+});
+
+musicSeekSlider.addEventListener('input', () => {
+  setSliderValue(musicSeekSlider, musicSeekSlider.value);
+  showMusicTime(Number(musicSeekSlider.value));
+});
+
+musicSeekSlider.addEventListener('change', () => {
+  if (musicTimeline) {
+    seekMusic(Number(musicSeekSlider.value));
+  }
+});
 
 volumeSlider.addEventListener('input', async () => {
   volumeError.textContent = '';

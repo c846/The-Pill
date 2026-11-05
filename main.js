@@ -255,6 +255,7 @@ async function getMediaSession() {
 
   $media = Wait-WinRt ($session.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties, Windows.Media.Control, ContentType=WindowsRuntime])
   $playback = $session.GetPlaybackInfo()
+  $timeline = $session.GetTimelineProperties()
   $thumbnail = $null
   if ($media.Thumbnail) {
     try {
@@ -300,6 +301,11 @@ async function getMediaSession() {
     artist = $media.Artist
     album = $media.AlbumTitle
     playbackStatus = $playback.PlaybackStatus.ToString()
+    playbackRate = $playback.PlaybackRate
+    canSeek = $playback.Controls.IsPlaybackPositionEnabled
+    position = ($timeline.Position - $timeline.StartTime).TotalSeconds
+    duration = ($timeline.EndTime - $timeline.StartTime).TotalSeconds
+    positionUpdatedAt = $timeline.LastUpdatedTime.ToUnixTimeMilliseconds()
     thumbnail = $thumbnail
   } -Compress
 `,
@@ -307,13 +313,13 @@ async function getMediaSession() {
   return output ? JSON.parse(output) : { available: false };
 }
 
-async function controlMediaSession(sessionId, action) {
+async function controlMediaSession(sessionId, action, position) {
   if (process.platform !== 'win32') {
     throw new Error('Media controls are only supported on Windows.');
   }
 
   const output = await runPowerShell(createMediaScript(
-    { sessionId, action },
+    { sessionId, action, position },
     `
   $manager = Wait-WinRt ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime])
   $session = $null
@@ -329,6 +335,10 @@ async function controlMediaSession(sessionId, action) {
     'toggle' { $result = Wait-WinRt ($session.TryTogglePlayPauseAsync()) ([bool]) }
     'previous' { $result = Wait-WinRt ($session.TrySkipPreviousAsync()) ([bool]) }
     'next' { $result = Wait-WinRt ($session.TrySkipNextAsync()) ([bool]) }
+    'seek' {
+      $ticks = $session.GetTimelineProperties().StartTime.Ticks + [long]($request.position * [TimeSpan]::TicksPerSecond)
+      $result = Wait-WinRt ($session.TryChangePlaybackPositionAsync($ticks)) ([bool])
+    }
     default { throw 'Invalid media control action.' }
   }
   if (-not $result) { throw 'The media app did not accept the requested control.' }
@@ -1704,15 +1714,16 @@ function createWindow() {
     }
     return getMediaSession();
   });
-  ipcMain.handle('pill:control-media-session', async (event, sessionId, action) => {
+  ipcMain.handle('pill:control-media-session', async (event, sessionId, action, position) => {
     if (
       event.sender !== window.webContents
       || typeof sessionId !== 'string'
-      || !['toggle', 'previous', 'next'].includes(action)
+      || !['toggle', 'previous', 'next', 'seek'].includes(action)
+      || (action === 'seek' && !(Number.isFinite(position) && position >= 0))
     ) {
       throw new Error('Invalid media control request');
     }
-    await controlMediaSession(sessionId, action);
+    await controlMediaSession(sessionId, action, position);
   });
   ipcMain.handle('pill:get-volume', (event) => {
     if (event.sender !== window.webContents) {

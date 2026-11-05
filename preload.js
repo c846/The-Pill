@@ -47,7 +47,7 @@ contextBridge.exposeInMainWorld('pillApp', {
     return () => ipcRenderer.removeListener('pill:shortcut', listener);
   },
   getMediaSession: () => ipcRenderer.invoke('pill:get-media-session'),
-  controlMediaSession: (sessionId, action) => ipcRenderer.invoke('pill:control-media-session', sessionId, action),
+  controlMediaSession: (sessionId, action, position) => ipcRenderer.invoke('pill:control-media-session', sessionId, action, position),
   openNotificationSettings: () => ipcRenderer.invoke('pill:open-notification-settings'),
   setNotificationOpen: (isOpen) => ipcRenderer.invoke('pill:set-notification-open', isOpen),
   onNotification: (callback) => {

@@ -820,7 +820,8 @@ input::placeholder {
   visibility: visible;
 }
 
-/* Sliders share one look: the pill's volume overlay plus the Pill Center's volume and night light. */
+/* Sliders share one look: the pill's volume overlay, the music track position, and the Pill Center's
+   volume and night light. */
 .pill-slider {
   --fill: 50%;
   height: 20px;
@@ -1014,11 +1015,37 @@ input::placeholder {
   font-size: 10px;
 }
 
+.music-timeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.music-seek-slider {
+  --fill: 0%;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.music-seek-slider:disabled {
+  cursor: not-allowed;
+}
+
+.music-time {
+  flex: 0 0 auto;
+  color: var(--pill-fg-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .music-actions {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .music-actions button {

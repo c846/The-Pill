@@ -87,6 +87,10 @@
             <span class="music-artist"></span>
             <span class="music-album"></span>
             <span class="music-status" role="status" aria-live="polite">Finds music playing in Windows apps.</span>
+            <div class="music-timeline">
+              <input class="pill-slider music-seek-slider" id="music-seek-slider" type="range" min="0" max="1" step="any" value="0" aria-label="Track position" disabled />
+              <output class="music-time" for="music-seek-slider">--:-- / --:--</output>
+            </div>
             <div class="music-actions">
               <button class="music-previous" type="button" aria-label="Previous track" disabled>
                 <span class="music-action-label" aria-hidden="true">

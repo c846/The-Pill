@@ -56,7 +56,7 @@
   --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0) 38%);
   --glass-rim: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.3) 35%, rgba(255, 255, 255, 0.12) 70%, rgba(255, 255, 255, 0.4) 100%);
   --glass-solid: rgba(255, 255, 255, 0.62);
-  --glass-inner-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.3), inset 0 -8px 18px rgba(255, 255, 255, 0.05);
+  --glass-inner-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.3);
   --surface: rgba(255, 255, 255, 0.78);
   --surface-strong: rgba(255, 255, 255, 0.84);
   --surface-stronger: rgba(255, 255, 255, 0.9);
@@ -86,7 +86,7 @@
   --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 38%);
   --glass-rim: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(150, 150, 150, 0.55) 35%, rgba(60, 60, 60, 0.5) 70%, rgba(90, 90, 90, 0.75) 100%);
   --glass-solid: rgba(38, 38, 38, 0.6);
-  --glass-inner-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.6), inset 0 -8px 18px rgba(0, 0, 0, 0.05);
+  --glass-inner-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.6);
   --surface: rgba(0, 0, 0, 0.78);
   --surface-strong: rgba(0, 0, 0, 0.84);
   --surface-stronger: rgba(0, 0, 0, 0.9);
@@ -110,6 +110,7 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: none;
 }
 
 html,
@@ -191,20 +192,17 @@ input::placeholder {
   --refraction-top-core: 2px;
 }
 
-/* Tall panels have room for a deeper rim on the sides and bottom, where content scrolls past.
-   The top stays shallow everywhere so the buttons and clock in the top bar stay sharp. */
+/* Panels have no rim blur on the sides and bottom. Their lists blur item by item as they scroll out
+   (see refract-block and refract-inline), so a rim blur on top would double it and smear the text
+   into a haze. */
 .pill.settings-open,
 .pill.music-open,
 .pill.apps-open,
-.pill.weather-open {
-  --refraction-depth: 16px;
-  --refraction-core: 3px;
-}
-
+.pill.weather-open,
 .pill.notification-open,
 .pill-center-bubble[data-view="notifications"] {
-  --refraction-depth: 12px;
-  --refraction-core: 3px;
+  --refraction-depth: 0px;
+  --refraction-core: 0px;
 }
 
 .pill::before,
@@ -219,6 +217,15 @@ input::placeholder {
   mask-image:
     linear-gradient(to bottom, #000 var(--refraction-top-core), transparent var(--refraction-top), transparent calc(100% - var(--refraction-depth)), #000 calc(100% - var(--refraction-core))),
     linear-gradient(to right, #000 var(--refraction-core), transparent var(--refraction-depth), transparent calc(100% - var(--refraction-depth)), #000 calc(100% - var(--refraction-core)));
+}
+
+/* Edge warp: with data-edge-warp on <html>, content bends at the rim instead of blurring. renderer.js
+   builds a filter for each size of glass and points --edge-warp at it, which .pill-content and the
+   active .center-view use as their filter. It has to filter the content itself: the glass is
+   see-through, so a warped copy drawn over it would leave the original showing behind. */
+:root[data-edge-warp] .pill::before,
+:root[data-edge-warp] .pill-center-bubble::before {
+  display: none;
 }
 
 .pill:hover {
@@ -1121,8 +1128,6 @@ input::placeholder {
   gap: 4px 8px;
   overflow: auto;
   padding: 2px 8px 12px;
-  scrollbar-color: var(--pill-fg-faint) transparent;
-  scrollbar-width: thin;
 }
 
 .app-list-item {
@@ -1259,17 +1264,33 @@ input::placeholder {
   font-size: 10px;
 }
 
+.weather-settings-change {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .weather-settings-form {
   display: flex;
   flex: 0 1 auto;
   align-items: center;
   min-width: 0;
   gap: 6px;
+  /* Clips the form while it opens, leaving room for the buttons' focus rings. */
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
 
+/* Hidden ones collapse in place instead of leaving the row, so the two can trade places. The margin takes back the row's gap. */
 .weather-settings-form[hidden],
 .weather-settings-change[hidden] {
-  display: none;
+  width: 0;
+  margin-left: -6px;
+  padding-inline: 0;
+  border-inline-width: 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .weather-settings-input {
@@ -1353,6 +1374,65 @@ input::placeholder {
   font-size: 10px;
 }
 
+.weather-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.weather-refresh {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-block: -2px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--pill-fg-soft);
+  cursor: pointer;
+  transition:
+    color var(--smoke-time) var(--ease-smoke),
+    scale var(--pop-time) var(--ease-pop);
+}
+
+.weather-refresh:hover,
+.weather-refresh:focus-visible {
+  color: var(--pill-fg);
+}
+
+.weather-refresh:active {
+  scale: 0.9;
+}
+
+.weather-refresh:disabled {
+  cursor: wait;
+}
+
+.weather-refresh svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.weather-refresh.is-refreshing svg {
+  animation: weather-refresh-spin 800ms linear infinite;
+}
+
+@keyframes weather-refresh-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
 .weather-location {
   overflow: hidden;
   width: 100%;
@@ -1389,14 +1469,16 @@ input::placeholder {
   font-weight: 600;
 }
 
-/* Hourly strip */
+/* Hourly strip. It cancels the pill's side padding so the hours scroll right out to the glass edge,
+   and pads itself back so they still start in line with the rest of the panel. */
 .weather-hourly {
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
+  margin-inline: -18px;
+  padding-inline: 18px;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none;
 }
 
 .weather-hour {
@@ -1716,9 +1798,11 @@ input::placeholder {
   visibility: visible;
 }
 
+/* Clipped rather than hidden: hidden can still scroll, and focus moving to a tile while the bubble is
+   short would scroll it out of line with its glass for good. */
 .pill-center-bubble {
   position: relative;
-  overflow: hidden;
+  overflow: clip;
   border-radius: 22px;
   background-image: var(--glass-sheen), var(--glass-tint);
   box-shadow: var(--glass-inner-shadow);
@@ -1753,6 +1837,7 @@ input::placeholder {
   height: 270px;
 }
 
+
 .pill-center-bubble[data-view="volume"] {
   border-radius: 24px;
 }
@@ -1775,6 +1860,11 @@ input::placeholder {
   opacity: 1;
   pointer-events: auto;
   visibility: visible;
+}
+
+/* The list keeps its own bottom padding so it can scroll right to the bottom of the bubble. */
+.center-notifications {
+  padding-bottom: 0;
 }
 
 .center-view [hidden] {
@@ -1978,9 +2068,7 @@ input::placeholder {
   min-height: 0;
   gap: 2px;
   overflow-y: auto;
-  padding-bottom: 6px;
-  scrollbar-color: var(--pill-fg-faint) transparent;
-  scrollbar-width: thin;
+  padding-bottom: 14px;
 }
 
 .center-notification {
@@ -2193,7 +2281,7 @@ input::placeholder {
 
 .pill[aria-expanded="true"] .pill-content {
   opacity: 1;
-  filter: none;
+  filter: var(--edge-warp, none);
   translate: none;
   transition:
     opacity 360ms var(--ease-smoke) 90ms,
@@ -2365,10 +2453,6 @@ input::placeholder {
 /* Fields and buttons are smoke too: their panes fade between shades. */
 .weather-zip-input,
 .weather-settings-input,
-.weather-zip-save,
-.weather-settings-change,
-.weather-settings-save,
-.weather-settings-cancel,
 .notification-settings,
 .center-clear,
 .music-actions .music-play-pause {
@@ -2376,6 +2460,16 @@ input::placeholder {
     background-color var(--smoke-time) var(--ease-smoke),
     color var(--smoke-time) var(--ease-smoke),
     opacity var(--smoke-time) var(--ease-smoke);
+}
+
+.weather-zip-save,
+.weather-settings-save,
+.weather-settings-cancel {
+  transition:
+    background-color var(--smoke-time) var(--ease-smoke),
+    color var(--smoke-time) var(--ease-smoke),
+    opacity var(--smoke-time) var(--ease-smoke),
+    scale var(--pop-time) var(--ease-pop);
 }
 
 /* Settings switch: the knob springs across while the track fades. */
@@ -2688,6 +2782,50 @@ input::placeholder {
   animation: smoke-in 300ms var(--ease-smoke);
 }
 
+.weather-zip-save:active:not(:disabled),
+.weather-settings-change:active,
+.weather-settings-save:active:not(:disabled),
+.weather-settings-cancel:active {
+  scale: 0.92;
+}
+
+/* The Change zip button and its form trade places like Pill Center's views: the old one drifts off
+   as the new one flows in, and the row's width flows between them. */
+.weather-settings-change,
+.weather-settings-form {
+  transition:
+    width var(--flow-time) var(--ease-flow),
+    margin var(--flow-time) var(--ease-flow),
+    padding var(--flow-time) var(--ease-flow),
+    border-width var(--flow-time) var(--ease-flow),
+    background-color var(--smoke-time) var(--ease-smoke),
+    color var(--smoke-time) var(--ease-smoke),
+    opacity var(--smoke-time) var(--ease-smoke) 120ms,
+    filter var(--smoke-time) var(--ease-smoke) 120ms,
+    scale var(--pop-time) var(--ease-pop),
+    visibility 0s;
+}
+
+.weather-settings-change[hidden],
+.weather-settings-form[hidden] {
+  filter: blur(4px);
+  scale: 0.92;
+  transition:
+    width var(--flow-time) var(--ease-flow),
+    margin var(--flow-time) var(--ease-flow),
+    padding var(--flow-time) var(--ease-flow),
+    border-width var(--flow-time) var(--ease-flow),
+    opacity 200ms var(--ease-smoke),
+    filter 200ms var(--ease-smoke),
+    scale 200ms var(--ease-smoke),
+    visibility 200ms;
+}
+
+.weather-zip-status:not(:empty),
+.weather-settings-status:not(:empty) {
+  animation: smoke-in 300ms var(--ease-smoke);
+}
+
 /* Notification: drops into the opened pill, then fades as the pill closes around it. */
 .notification-toast {
   filter: blur(4px);
@@ -2801,7 +2939,7 @@ input::placeholder {
 }
 
 .center-view.is-active {
-  filter: none;
+  filter: var(--edge-warp, none);
   translate: none;
   transition:
     opacity 320ms var(--ease-smoke) 120ms,
@@ -2852,6 +2990,13 @@ input::placeholder {
 
 .center-option.is-confirming {
   animation: smoke-in 300ms var(--ease-smoke);
+}
+
+/* The warp replaces the per-item blur, so only the entrance rise is left. */
+:root[data-edge-warp] .app-list-item,
+:root[data-edge-warp] .weather-hour,
+:root[data-edge-warp] .center-notification {
+  animation-name: none, rise;
 }
 
 .center-notification {

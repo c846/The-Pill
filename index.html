@@ -131,7 +131,12 @@
             </div>
             <div class="weather-place">
               <span class="weather-location"></span>
-              <span class="weather-updated" role="status" aria-live="polite"></span>
+              <div class="weather-status">
+                <span class="weather-updated" role="status" aria-live="polite"></span>
+                <button class="weather-refresh" type="button" aria-label="Refresh weather" title="Refresh weather">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" /><path d="M13.5 1.5v3h-3" /></svg>
+                </button>
+              </div>
             </div>
           </div>
           <p class="weather-alerts" role="alert" hidden></p>

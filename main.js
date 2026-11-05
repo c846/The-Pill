@@ -58,6 +58,8 @@ let windowHelper;
 let listedWindowHandles = new Set();
 let watchingAppSwitcherRelease = false;
 const volumeKeyStep = 2;
+// The volume helper reads a plain 0 as no level at all and leaves the volume alone. Any fraction reaches silence.
+const silentVolume = 0.001;
 // Night light strength runs from 0% at 6500K to 100% at 1200K, matching the slider in Windows Settings.
 const nightLightCoolest = 6500;
 const nightLightWarmest = 1200;
@@ -72,6 +74,8 @@ let volumeKeyStateRead;
 let volumeKeyUsedAt = 0;
 let volumeKeyWritten;
 let volumeKeyWriting = false;
+let volumeSliderTarget;
+let volumeSliderWrite;
 
 function runPowerShell(script) {
   const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
@@ -991,6 +995,11 @@ async function setNightLight(enabled, strength) {
       payload = Buffer.concat([settings.payload.subarray(0, next), field, settings.payload.subarray(next)]);
     }
     newSettings = buildCloudStoreBlob(settings, payload);
+    // Saving the settings alone only takes effect at the next toggle, so a fresh copy of the on state
+    // follows them to get Windows to read the new strength now.
+    if (newState === '-' && state && isNightLightOn(state)) {
+      newState = buildCloudStoreBlob(state, state.payload);
+    }
   }
   if (newState !== '-' || newSettings !== '-') {
     await requestWindowHelper(`nightlight-set ${newState} ${newSettings}`);
@@ -1635,6 +1644,13 @@ function createWindow() {
 
     return getWeatherReport();
   });
+  ipcMain.handle('pill:refresh-weather', async (event) => {
+    if (event.sender !== window.webContents) {
+      throw new Error('Unauthorized weather refresh request');
+    }
+
+    await refreshWeather(true);
+  });
   ipcMain.handle('pill:set-weather-zip', async (event, zip) => {
     if (event.sender !== window.webContents) {
       throw new Error('Unauthorized weather zip request');
@@ -1738,7 +1754,7 @@ function createWindow() {
     }
 
     volumeKeyState = undefined;
-    return loudness.setVolume(volume);
+    return writeSliderVolume(volume);
   });
 
   window.loadFile(path.join(__dirname, 'index.html'));
@@ -1845,6 +1861,31 @@ function readVolumeKeyState() {
   return volumeKeyStateRead;
 }
 
+function setSystemVolume(volume) {
+  return loudness.setVolume(volume || silentVolume);
+}
+
+// A dragged slider sends levels faster than the volume helper runs, and separate runs can finish out
+// of order, which could leave Windows on an older level. So one runs at a time, always the latest.
+function writeSliderVolume(volume) {
+  volumeSliderTarget = volume;
+  if (!volumeSliderWrite) {
+    volumeSliderWrite = (async () => {
+      try {
+        while (volumeSliderTarget !== undefined) {
+          const target = volumeSliderTarget;
+          volumeSliderTarget = undefined;
+          await setSystemVolume(target);
+        }
+      } finally {
+        volumeSliderTarget = undefined;
+        volumeSliderWrite = undefined;
+      }
+    })();
+  }
+  return volumeSliderWrite;
+}
+
 async function writeVolumeKeyState() {
   if (volumeKeyWriting) {
     return;
@@ -1863,7 +1904,7 @@ async function writeVolumeKeyState() {
         await loudness.setMuted(muted);
       }
       if (volume !== volumeKeyWritten.volume) {
-        await loudness.setVolume(volume);
+        await setSystemVolume(volume);
       }
       volumeKeyWritten = { volume, muted };
     }

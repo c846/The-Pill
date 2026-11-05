@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('pillApp', {
   setMusicOpen: (isOpen) => ipcRenderer.send('pill:set-music-open', isOpen),
   setWeatherOpen: (isOpen) => ipcRenderer.invoke('pill:set-weather-open', isOpen),
   getWeather: () => ipcRenderer.invoke('pill:get-weather'),
+  refreshWeather: () => ipcRenderer.invoke('pill:refresh-weather'),
   setWeatherZip: (zip) => ipcRenderer.invoke('pill:set-weather-zip', zip),
   onWeather: (callback) => {
     const listener = (_event, report) => callback(report);

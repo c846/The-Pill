@@ -30,6 +30,7 @@ const weatherTemperature = document.querySelector('.weather-temperature');
 const weatherDescription = document.querySelector('.weather-description');
 const weatherLocation = document.querySelector('.weather-location');
 const weatherUpdated = document.querySelector('.weather-updated');
+const weatherRefresh = document.querySelector('.weather-refresh');
 const weatherAlerts = document.querySelector('.weather-alerts');
 const weatherForecasts = document.querySelector('.weather-forecasts');
 const weatherHourly = document.querySelector('.weather-hourly');
@@ -838,6 +839,10 @@ async function setWeatherPanelOpen(isOpen, resizeWindow = true) {
   if (isOpen) {
     pill.classList.remove('weather-closing');
     pill.classList.add('weather-open');
+    // It opens fresh each time, even if the pill stayed open since the last look.
+    weatherDayBubble.hidden = true;
+    renderWeather();
+    weatherHourly.scrollLeft = 0;
     if (resizeWindow) {
       try {
         await window.pillApp.setWeatherOpen(true);
@@ -1450,7 +1455,16 @@ async function openAppsFromShortcut() {
 
   keyboardPinned = !pill.matches(':hover');
   if (!expanded) {
-    await expandPill(true);
+    // The pill grows straight into the panel instead of stopping at the top bar first.
+    opening = true;
+    try {
+      await window.pillApp.setAppsOpen(true);
+      expanded = true;
+      pill.setAttribute('aria-expanded', 'true');
+    } catch (error) {
+      console.error('Failed to open the apps panel:', error);
+    }
+    opening = false;
   }
   if (!expanded || animating || opening) {
     keyboardPinned = false;
@@ -1562,6 +1576,8 @@ async function openPillSettings() {
     return;
   }
 
+  // Closing the apps panel below clears the pin.
+  const keepOpen = keyboardPinned;
   if (pill.classList.contains('music-open')) {
     setMusicControlsOpen(false, false);
   }
@@ -1786,6 +1802,17 @@ weatherSettingsForm.addEventListener('submit', (event) => {
 });
 weatherSettingsChange.addEventListener('click', () => setSettingsZipEditing(true));
 weatherSettingsCancel.addEventListener('click', () => setSettingsZipEditing(false));
+weatherRefresh.addEventListener('click', async () => {
+  weatherRefresh.disabled = true;
+  weatherRefresh.classList.add('is-refreshing');
+  try {
+    await window.pillApp.refreshWeather();
+  } catch (error) {
+    console.error('Failed to refresh weather:', error);
+  }
+  weatherRefresh.disabled = false;
+  weatherRefresh.classList.remove('is-refreshing');
+});
 weatherHourly.addEventListener('wheel', (event) => {
   // Lets a regular mouse wheel scroll the hourly strip sideways.
   if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
@@ -2225,3 +2252,189 @@ centerClear.addEventListener('click', () => {
 
 showCenterView('grid');
 updateNotificationHistoryState();
+
+// ---------- Edge warp ----------
+// Bends content at the rim of the glass, like light through its thick edge. Set this to false to go
+// back to the blurred edge. It only reaches the pill's own content, not the desktop behind the window.
+const edgeWarpEnabled = true;
+const edgeWarpDepth = 18;
+const edgeWarpShallowDepth = 7;
+// How far the rim pulls content, as a share of the depth. Much above 0.3 and text tears into spikes.
+const edgeWarpBend = 0.3;
+// The displacement filter doesn't smooth what it stretches, so the warped zone gets this slight blur.
+// It is the only part of the warp that costs anything while scrolling; 0 turns it off.
+const edgeWarpSoftening = 0.6;
+const edgeWarpWideWidth = 400;
+const edgeWarpTallHeight = 200;
+const edgeWarpMinHeight = 20;
+const edgeWarpSettleDelay = 90;
+// Room around the glass that the filter covers. It has to reach content still showing while the glass
+// shrinks or springs past its size, or that content would be cut off. Taller than any glass gets.
+const edgeWarpRegionHeight = 420;
+const edgeWarpRegionSides = 24;
+const edgeWarpFilters = new Map();
+
+function createEdgeWarpMap(width, height, radius, sideDepth, bottomDepth) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  const image = context.createImageData(width, height);
+  const corner = Math.min(radius, width / 2, height / 2);
+  const largestDepth = Math.max(sideDepth, bottomDepth);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const fromCenterX = x + 0.5 - width / 2;
+      const fromCenterY = y + 0.5 - height / 2;
+      const cornerX = Math.abs(fromCenterX) - (width / 2 - corner);
+      const cornerY = Math.abs(fromCenterY) - (height / 2 - corner);
+      const outX = Math.max(cornerX, 0);
+      const outY = Math.max(cornerY, 0);
+      const outLength = Math.hypot(outX, outY);
+      const edgeDistance = corner - (outLength > 0 ? outLength : Math.max(cornerX, cornerY));
+      let normalX = 0;
+      let normalY = 0;
+      if (outLength > 0) {
+        normalX = (outX / outLength) * Math.sign(fromCenterX);
+        normalY = (outY / outLength) * Math.sign(fromCenterY);
+      } else if (cornerX > cornerY) {
+        normalX = Math.sign(fromCenterX);
+      } else {
+        normalY = Math.sign(fromCenterY);
+      }
+
+      // The top stays shallow so the buttons and clock in the top bar stay sharp.
+      const endDepth = normalY < 0 ? edgeWarpShallowDepth : bottomDepth;
+      const localDepth = normalX * normalX * sideDepth + normalY * normalY * endDepth;
+      const closeness = Math.max(0, 1 - edgeDistance / localDepth);
+      const shift = (closeness * closeness * localDepth) / largestDepth;
+      const index = (y * width + x) * 4;
+      image.data[index] = 128 - 127 * shift * normalX;
+      image.data[index + 1] = 128 - 127 * shift * normalY;
+      // Blue marks the warped zone, which is where the softening applies.
+      image.data[index + 2] = 255 * closeness;
+      image.data[index + 3] = 255;
+    }
+  }
+
+  context.putImageData(image, 0, 0);
+  return canvas.toDataURL();
+}
+
+// Filters are kept per size, since the glass only settles on a handful of them.
+// The filter's coordinates start at the content, which can sit inside the glass by offsetX and offsetY.
+function getEdgeWarpFilter(width, height, radius, offsetX, offsetY) {
+  const id = `edge-warp-${width}-${height}-${radius}-${offsetX}-${offsetY}`;
+  if (edgeWarpFilters.has(id)) {
+    return id;
+  }
+
+  // Narrow glass has controls close to its sides, so only wide glass warps deeply there.
+  const sideDepth = width >= edgeWarpWideWidth ? edgeWarpDepth : edgeWarpShallowDepth;
+  const bottomDepth = height >= edgeWarpTallHeight ? edgeWarpDepth : edgeWarpShallowDepth;
+  const svgNamespace = 'http://www.w3.org/2000/svg';
+  const createPart = (name, attributes = {}) => {
+    const part = document.createElementNS(svgNamespace, name);
+    Object.entries(attributes).forEach(([key, value]) => part.setAttribute(key, value));
+    return part;
+  };
+  const filter = createPart('filter', {
+    x: -offsetX - edgeWarpRegionSides,
+    y: -offsetY,
+    width: width + edgeWarpRegionSides * 2,
+    height: edgeWarpRegionHeight,
+    id,
+    filterUnits: 'userSpaceOnUse',
+    'color-interpolation-filters': 'sRGB',
+  });
+  // The map sits on neutral gray, so nothing moves while its image is still loading.
+  const merge = createPart('feMerge', { result: 'map' });
+  merge.append(createPart('feMergeNode', { in: 'neutral' }), createPart('feMergeNode', { in: 'image' }));
+  filter.append(
+    createPart('feFlood', { 'flood-color': 'rgb(128, 128, 0)', result: 'neutral' }),
+    createPart('feImage', {
+      x: -offsetX,
+      y: -offsetY,
+      width,
+      height,
+      href: createEdgeWarpMap(width, height, radius, sideDepth, bottomDepth),
+      preserveAspectRatio: 'none',
+      result: 'image',
+    }),
+    merge,
+    createPart('feDisplacementMap', {
+      in: 'SourceGraphic',
+      in2: 'map',
+      scale: 2 * edgeWarpBend * Math.max(sideDepth, bottomDepth),
+      xChannelSelector: 'R',
+      yChannelSelector: 'G',
+      result: 'bent',
+    }),
+  );
+  if (edgeWarpSoftening > 0) {
+    filter.append(
+      createPart('feColorMatrix', { in: 'map', values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0', result: 'zone' }),
+      createPart('feGaussianBlur', { in: 'bent', stdDeviation: edgeWarpSoftening, result: 'soft' }),
+      createPart('feComposite', { in: 'soft', in2: 'zone', operator: 'in', result: 'softRim' }),
+      createPart('feComposite', { in: 'bent', in2: 'zone', operator: 'out', result: 'sharpMiddle' }),
+      createPart('feComposite', { in: 'softRim', in2: 'sharpMiddle', operator: 'arithmetic', k2: 1, k3: 1 }),
+    );
+  }
+  document.getElementById('edge-warp-filters').append(filter);
+  edgeWarpFilters.set(id, filter);
+  return id;
+}
+
+// The size the glass is heading for: where its running transitions end, or else where it is now.
+function getEdgeWarpTarget(glass, content) {
+  const target = {
+    width: glass.offsetWidth,
+    height: glass.offsetHeight,
+    borderTopLeftRadius: parseFloat(getComputedStyle(glass).borderTopLeftRadius) || 0,
+    paddingLeft: content?.offsetLeft ?? 0,
+    paddingTop: content?.offsetTop ?? 0,
+  };
+  for (const transition of glass.getAnimations()) {
+    const end = transition.effect.getKeyframes().at(-1);
+    for (const name of Object.keys(target)) {
+      if (name in end && (content || !name.startsWith('padding'))) {
+        target[name] = Math.round(parseFloat(end[name]));
+      }
+    }
+  }
+  return target;
+}
+
+function watchEdgeWarp(glass, content) {
+  let settleTimer;
+
+  const applyWarp = () => {
+    const { width, height, borderTopLeftRadius, paddingLeft, paddingTop } = getEdgeWarpTarget(glass, content);
+    if (height < edgeWarpMinHeight) {
+      glass.style.removeProperty('--edge-warp');
+      return;
+    }
+    const id = getEdgeWarpFilter(width, height, borderTopLeftRadius, paddingLeft, paddingTop);
+    glass.style.setProperty('--edge-warp', `url(#${id})`);
+  };
+
+  // The warp is fitted to where the glass will end up as soon as it starts moving, so content is
+  // already bent as the rim reaches it instead of snapping into place once the glass settles.
+  new ResizeObserver(() => {
+    applyWarp();
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(applyWarp, edgeWarpSettleDelay);
+  }).observe(glass);
+}
+
+if (edgeWarpEnabled) {
+  const filters = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  filters.id = 'edge-warp-filters';
+  filters.setAttribute('aria-hidden', 'true');
+  filters.style.cssText = 'position: absolute; width: 0; height: 0;';
+  document.body.append(filters);
+  document.documentElement.dataset.edgeWarp = '';
+  watchEdgeWarp(pill, pill.querySelector('.pill-content'));
+  watchEdgeWarp(document.querySelector('.pill-center-bubble'));
+}

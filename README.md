@@ -14,6 +14,3 @@ The **alt + space** keyboard shortcut opens the app switcher. Keep holding alt a
 The **alt + q** keyboard shortcut opens app search. Press **enter** to open the first match.
 
 In the apps panel, right click an app to add it to your favorites, and right click a favorite to remove it.
-
-#### The state of the Pill!  
-The Pill is still relatively rudimentary, but I will most likely add new features unless I don't feel like it later down the line. Most of the bugs are probably ironed out.

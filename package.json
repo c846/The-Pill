@@ -1,6 +1,6 @@
 {
   "name": "the-pill",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "description": "A pill-shaped desktop overlay for Windows.",
   "author": "c846",
   "main": "main.js",
@@ -21,6 +21,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "runAfterFinish": true,
+      "uninstallDisplayName": "${productName}",
       "include": "installer.nsh"
     }
   },

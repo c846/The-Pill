@@ -1,6 +1,7 @@
 /*
   renderer.js drives this stylesheet by toggling classes. Its only inline styles are positions on
-  the weather chart (--level, left, bottom) and the weather day bubble (left, top, transform-origin).
+  the weather chart (--level, left, bottom), the weather day bubble (left, top, transform-origin) and
+  the bubbles (left, --center-origin, --running-rows).
 
   States on .pill:
     aria-expanded="true|false", idle-transparent, notification-open, notification-closing,
@@ -9,7 +10,7 @@
     settings-returning, settings-switching-out, settings-entering, app-switcher-open
   States on children:
     pill-option-disabled (hidden option), .pill-settings-option.is-disabled + aria-pressed,
-    data-weather-state (toggle, hours, week days), .weather-hour.is-new-day,
+    data-weather-state (hours, week days), .weather-hour.is-new-day,
     .weather-week-day.has-notice, .battery-percentage.is-low/.is-critical/.is-charging,
     .music-previous/.music-next.is-bumping, .music-play-pause-icon.is-changing,
     .weather-day-bubble.is-popping, .app-switcher-entry.is-entering/.is-leaving
@@ -27,11 +28,14 @@
   clear room around each size so the springs can overshoot without being clipped.
 
   The Pill Center is a separate glass bubble (.pill-center) that hangs under the open pill, outside
-  it, so the window grows to 330 while it is open. Its tallest view must end above that: the bubble
-  starts at 50 (the 42 pill plus an 8 gap), and the notifications view is 270 tall.
+  it, so the window grows to 580 while it is open. Its tiles stay put and a view extends the bubble
+  below them, and the tallest result must end above that with room for the wrapper's bottom padding:
+  the bubble starts at 50 (the 42 pill plus an 8 gap), the tiles are 260 and notifications add 220.
+  The running apps bubble (.pill-running) reuses the same glass and the same window size.
   States on .pill-center: is-open. On .pill-center-bubble: data-view="grid|volume|nightlight|power|
-  notifications". On children: .center-view.is-active, .center-tile[aria-pressed],
-  .center-option.is-confirming, .center-notification.is-unread.
+  notifications", where grid means nothing is extended. On children: .center-view.is-active,
+  .center-tile[aria-pressed], .center-tile[aria-expanded], .center-option.is-confirming,
+  .center-notification.is-unread.
   renderer.js waits on an opacity transition on .pill-center-bubble before shrinking the window.
 */
 
@@ -181,6 +185,11 @@ input::placeholder {
   mask-composite: exclude;
 }
 
+/* The bubbles hang out in the open with nothing around them, so their rim stays quieter than the pill's. */
+.pill-center-bubble::after {
+  opacity: 0.6;
+}
+
 /* Refraction: content passing near the edge of the glass blurs, as if seen through its thick rim.
    A blurred copy of what is underneath fades in toward the edges. It only reaches the pill's own
    content, since the desktop behind the window can't be blurred. */
@@ -220,8 +229,8 @@ input::placeholder {
 }
 
 /* Edge warp: with data-edge-warp on <html>, content bends at the rim instead of blurring. renderer.js
-   builds a filter for each size of glass and points --edge-warp at it, which .pill-content and the
-   active .center-view use as their filter. It has to filter the content itself: the glass is
+   builds a filter for each size of glass and points --edge-warp at it, which .pill-content and
+   .center-content use as their filter. It has to filter the content itself: the glass is
    see-through, so a warped copy drawn over it would leave the original showing behind. */
 :root[data-edge-warp] .pill::before,
 :root[data-edge-warp] .pill-center-bubble::before {
@@ -362,7 +371,7 @@ input::placeholder {
 
 .center-toggle,
 .music-toggle,
-.weather-toggle,
+.running-toggle,
 .apps-toggle {
   display: inline-flex;
   align-items: center;
@@ -376,18 +385,18 @@ input::placeholder {
 
 .center-toggle[aria-expanded="true"]::before,
 .music-toggle[aria-expanded="true"]::before,
-.weather-toggle[aria-expanded="true"]::before,
+.running-toggle[aria-expanded="true"]::before,
 .apps-toggle[aria-expanded="true"]::before {
   background: var(--surface-strong);
 }
 
 .music-toggle,
-.weather-toggle {
+.running-toggle {
   justify-content: center;
   font-size: 12px;
 }
 
-/* The date, time and battery share one button, which opens the Pill Center. */
+/* The date, time, weather and battery share one button, which opens the Pill Center. */
 .center-toggle {
   flex: 0 0 auto;
   justify-content: center;
@@ -401,7 +410,7 @@ input::placeholder {
   white-space: nowrap;
 }
 
-/* With the date, time and battery all turned off, the button shows a tiny pill so it can still be found. */
+/* With the date, time, weather and battery all turned off, the button shows a tiny pill so it can still be found. */
 .center-toggle:not(:has(> :not(.pill-option-disabled):not([hidden])))::after {
   width: 14px;
   height: 5px;
@@ -410,17 +419,21 @@ input::placeholder {
   content: "";
 }
 
-/* The weather button sits left of the date and sizes to its icon, or its word before the forecast loads. */
-.pill-datetime .weather-toggle {
-  flex: 0 0 auto;
-  height: 28px;
-  min-width: 36px;
-  padding: 0 8px;
-  white-space: nowrap;
+/* Only shows the conditions, so it stays out of the bar until there is a forecast to show. */
+.weather-indicator {
+  display: inline-flex;
+}
+
+.weather-indicator[hidden] {
+  display: none;
+}
+
+.apps-toggle,
+.running-toggle {
+  order: -1;
 }
 
 .apps-toggle {
-  order: -1;
   justify-content: center;
   font-size: 12px;
 }
@@ -444,15 +457,9 @@ input::placeholder {
   display: var(--icon-dark);
 }
 
-/* The weather toggle shows its word until there is a forecast to pick an icon for. */
-.weather-toggle:not([data-weather-state]) .pill-icon,
-.weather-toggle[data-weather-state] .weather-toggle-label {
-  display: none;
-}
-
 .center-toggle:focus-visible,
 .music-toggle:focus-visible,
-.weather-toggle:focus-visible,
+.running-toggle:focus-visible,
 .apps-toggle:focus-visible,
 .pill-slider:focus-visible {
   outline: 2px solid var(--pill-fg-soft);
@@ -494,23 +501,15 @@ input::placeholder {
   border: 0;
 }
 
-.pill-datetime .weather-toggle.pill-option-disabled {
-  min-width: 0;
-  padding: 0;
-  border: 0;
-}
-
 .pill-actions button.pill-option-disabled.apps-toggle {
   flex: 0 0 0;
   width: 0;
 }
 
-.pill-datetime > .weather-toggle:not(.pill-option-disabled),
 .center-toggle > :not(.pill-option-disabled) {
   max-width: 110px;
 }
 
-.pill-datetime > .pill-option-disabled,
 .center-toggle > .pill-option-disabled {
   flex: 0 0 0;
   max-width: 0;
@@ -571,8 +570,18 @@ input::placeholder {
   background: transparent;
   color: inherit;
   cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
+}
+
+/* The close and back marks are drawn, since a text glyph sits off center in its round button. */
+.notification-close svg,
+.center-back svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
 }
 
 .notification-content {
@@ -1146,15 +1155,47 @@ input::placeholder {
   cursor: wait;
 }
 
-.apps-list {
+.apps-list,
+.apps-favorites-list {
   display: grid;
-  flex: 1 1 auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-content: start;
   min-height: 0;
   gap: 4px 8px;
   overflow: auto;
+}
+
+.apps-list {
+  flex: 1 1 auto;
   padding: 2px 8px 12px;
+}
+
+/* Sits under the search with a line below it, and scrolls by itself so a long list leaves room for the rest. */
+.apps-favorites {
+  flex: 0 0 auto;
+  margin: 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--pill-fg-faint);
+}
+
+.apps-favorites-list {
+  max-height: 116px;
+}
+
+.apps-favorites-list[hidden],
+.apps-favorites-hint[hidden] {
+  display: none;
+}
+
+.apps-favorites:has(> [hidden] + [hidden]) {
+  display: none;
+}
+
+.apps-favorites-hint {
+  margin: 0;
+  color: var(--pill-fg-soft);
+  font-size: 10px;
+  text-align: center;
 }
 
 .app-list-item {
@@ -1814,10 +1855,17 @@ input::placeholder {
   top: 22px;
   left: 0;
   z-index: 0;
-  width: 240px;
+  width: 216px;
   padding-top: 28px;
+  /* Closing a view shrinks the bubble out from under the back button, so this invisible strip keeps the
+     pointer inside the wrapper instead of counting as it leaving. */
+  padding-bottom: 44px;
   pointer-events: none;
   visibility: hidden;
+}
+
+.pill-running {
+  width: 240px;
 }
 
 .pill-center.is-open {
@@ -1836,42 +1884,58 @@ input::placeholder {
   color: var(--pill-fg);
   font-size: 12px;
   text-shadow: var(--pill-text-shadow);
+  --center-grid-height: 260px;
+  --center-extension: 0px;
+  height: calc(var(--center-grid-height) + var(--center-extension));
 }
 
-/* Each view keeps its own height while the bubble springs between them, so nothing reflows mid-move. */
-.pill-center-bubble[data-view="grid"],
-.center-grid {
-  height: 136px;
+/* Without the weather tile the bubble loses its row. */
+.pill-center-bubble:has(.center-weather-tile[hidden]) {
+  --center-grid-height: 204px;
 }
 
-.pill-center-bubble[data-view="volume"],
+.center-content {
+  position: relative;
+  height: 100%;
+}
+
+/* Each view keeps its own height while the bubble springs around it, so nothing reflows mid-move. */
+.pill-center-bubble[data-view="volume"] {
+  --center-extension: 48px;
+}
+
 .center-volume {
   height: 48px;
 }
 
-.pill-center-bubble[data-view="nightlight"],
+.pill-center-bubble[data-view="nightlight"] {
+  --center-extension: 104px;
+}
+
 .center-nightlight {
   height: 104px;
 }
 
-.pill-center-bubble[data-view="power"],
+.pill-center-bubble[data-view="power"] {
+  --center-extension: 152px;
+}
+
 .center-power {
   height: 152px;
 }
 
-.pill-center-bubble[data-view="notifications"],
+.pill-center-bubble[data-view="notifications"] {
+  --center-extension: 220px;
+}
+
 .center-notifications {
-  height: 270px;
+  height: 220px;
 }
 
-
-.pill-center-bubble[data-view="volume"] {
-  border-radius: 24px;
-}
-
+/* Views extend the bubble below the tiles, which stay where they are. */
 .center-view {
   position: absolute;
-  top: 0;
+  top: var(--center-grid-height);
   right: 0;
   left: 0;
   display: flex;
@@ -1894,16 +1958,65 @@ input::placeholder {
   padding-bottom: 0;
 }
 
-.center-view [hidden] {
+.center-view [hidden],
+.center-grid [hidden] {
   display: none;
 }
 
-/* Grid of tiles */
+/* Grid of tiles: two to a row, under a weather tile that takes up a whole row. */
 .center-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: 1fr;
   gap: 4px;
+  height: var(--center-grid-height);
+  padding: 8px;
+}
+
+.center-grid:has(.center-weather-tile:not([hidden])) {
+  grid-template-rows: 52px;
+}
+
+.center-tile.center-weather-tile {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.center-weather-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.center-weather-icon .pill-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.center-weather-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.center-weather-temperature {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.center-weather-summary {
+  overflow: hidden;
+  color: var(--pill-fg-soft);
+  font-size: 10px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .center-tile {
@@ -1972,13 +2085,11 @@ input::placeholder {
   justify-content: center;
   width: 28px;
   height: 28px;
-  padding: 0 0 2px;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
   cursor: pointer;
-  font-size: 20px;
-  line-height: 1;
 }
 
 .center-switch {
@@ -2066,6 +2177,72 @@ input::placeholder {
 
 .center-option.is-confirming {
   font-weight: 600;
+}
+
+/* Running apps: as many rows as there are apps, up to the point where the list scrolls instead. */
+.pill-running-bubble {
+  height: calc(44px + min(var(--running-rows, 1), 7) * 46px);
+}
+
+.running-content {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 8px 0;
+}
+
+.running-title {
+  flex: 0 0 28px;
+  padding: 0 12px;
+  line-height: 28px;
+}
+
+.running-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  gap: 2px;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.running-app-item {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.center-option.running-app {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
+  height: 44px;
+  gap: 1px;
+}
+
+.center-option.running-app:disabled {
+  cursor: wait;
+}
+
+.running-app-name,
+.running-app-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.running-app-name {
+  font-weight: 600;
+}
+
+.running-app-title {
+  color: var(--pill-fg-soft);
+  font-size: 10px;
+}
+
+.running-empty[hidden] {
+  display: none;
 }
 
 /* Notification history */
@@ -2191,13 +2368,14 @@ input::placeholder {
 
 .center-toggle:hover,
 .music-toggle:hover,
-.weather-toggle:hover,
+.running-toggle:hover,
 .apps-toggle:hover,
 .center-toggle[aria-expanded="true"],
 .music-toggle[aria-expanded="true"],
-.weather-toggle[aria-expanded="true"],
+.running-toggle[aria-expanded="true"],
 .apps-toggle[aria-expanded="true"],
 .app-launch-button:hover:not(:disabled),
+.apps-list.is-filtered .app-list-item:first-child .app-launch-button,
 .pill-settings-option:hover,
 .apps-search,
 .weather-zip-input,
@@ -2210,6 +2388,7 @@ input::placeholder {
 .notification-close:hover,
 .center-tile:hover:not(:disabled),
 .center-tile[aria-pressed="true"],
+.center-tile[aria-expanded="true"],
 .center-back:hover,
 .center-switch:hover:not(:disabled),
 .center-option:hover,
@@ -2350,7 +2529,7 @@ input::placeholder {
 
 .center-toggle,
 .music-toggle,
-.weather-toggle,
+.running-toggle,
 .apps-toggle {
   transition:
     color var(--smoke-time) var(--ease-smoke),
@@ -2366,12 +2545,12 @@ input::placeholder {
 
 .center-toggle:active,
 .music-toggle:active,
-.weather-toggle:active,
+.running-toggle:active,
 .apps-toggle:active {
   scale: 0.92;
 }
 
-/* Options turned off in Pill Settings drain away instead of vanishing. The weather button has its own transitions above. */
+/* Options turned off in Pill Settings drain away instead of vanishing. */
 .center-toggle > * {
   transition:
     max-width var(--flow-time) var(--ease-flow),
@@ -2383,7 +2562,7 @@ input::placeholder {
 /* Smoky highlights sit on a ::before so they can drift in and out without moving the text. */
 .center-toggle,
 .music-toggle,
-.weather-toggle,
+.running-toggle,
 .apps-toggle,
 .app-launch-button,
 .pill-settings-option,
@@ -2401,7 +2580,7 @@ input::placeholder {
 
 .center-toggle::before,
 .music-toggle::before,
-.weather-toggle::before,
+.running-toggle::before,
 .apps-toggle::before,
 .app-launch-button::before,
 .pill-settings-option::before,
@@ -2432,13 +2611,14 @@ input::placeholder {
 
 .center-toggle:hover::before,
 .music-toggle:hover::before,
-.weather-toggle:hover::before,
+.running-toggle:hover::before,
 .apps-toggle:hover::before,
 .center-toggle[aria-expanded="true"]::before,
 .music-toggle[aria-expanded="true"]::before,
-.weather-toggle[aria-expanded="true"]::before,
+.running-toggle[aria-expanded="true"]::before,
 .apps-toggle[aria-expanded="true"]::before,
 .app-launch-button:hover:not(:disabled)::before,
+.apps-list.is-filtered .app-list-item:first-child .app-launch-button::before,
 .pill-settings-option:hover::before,
 .music-previous:hover:not(:disabled)::before,
 .music-next:hover:not(:disabled)::before,
@@ -2446,6 +2626,7 @@ input::placeholder {
 .weather-hour:hover::before,
 .center-tile:hover:not(:disabled)::before,
 .center-tile[aria-pressed="true"]::before,
+.center-tile[aria-expanded="true"]::before,
 .center-back:hover::before,
 .center-switch:hover:not(:disabled)::before,
 .center-option:hover::before,
@@ -2935,9 +3116,7 @@ input::placeholder {
     opacity var(--smoke-time) var(--ease-smoke),
     filter var(--smoke-time) var(--ease-smoke),
     scale var(--smoke-time) var(--ease-smoke),
-    translate var(--smoke-time) var(--ease-smoke),
-    height var(--flow-time) var(--ease-flow),
-    border-radius var(--flow-time) var(--ease-flow);
+    translate var(--smoke-time) var(--ease-smoke);
 }
 
 .pill-center.is-open .pill-center-bubble {
@@ -2950,11 +3129,10 @@ input::placeholder {
     filter 300ms var(--ease-smoke),
     scale var(--pop-time) var(--ease-pop),
     translate var(--pop-time) var(--ease-pop),
-    height var(--flow-time) var(--ease-flow),
-    border-radius var(--flow-time) var(--ease-flow);
+    height var(--flow-time) var(--ease-flow);
 }
 
-/* Views trade places like the pill's panels: the old one drifts off as the new one flows in. */
+/* The bubble extends to make room and views trade places: the old one drifts off as the new one flows in. */
 .center-view {
   filter: blur(4px);
   translate: 0 6px;
@@ -2965,8 +3143,12 @@ input::placeholder {
     visibility 200ms;
 }
 
-.center-view.is-active {
+.center-content {
   filter: var(--edge-warp, none);
+}
+
+.center-view.is-active {
+  filter: none;
   translate: none;
   transition:
     opacity 320ms var(--ease-smoke) 120ms,
@@ -3022,11 +3204,13 @@ input::placeholder {
 /* The warp replaces the per-item blur, so only the entrance rise is left. */
 :root[data-edge-warp] .app-list-item,
 :root[data-edge-warp] .weather-hour,
-:root[data-edge-warp] .center-notification {
+:root[data-edge-warp] .center-notification,
+:root[data-edge-warp] .running-app-item {
   animation-name: none, rise;
 }
 
-.center-notification {
+.center-notification,
+.running-app-item {
   animation:
     refract-block linear both,
     rise 420ms var(--ease-flow) backwards;

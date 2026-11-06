@@ -13,7 +13,9 @@ const appsToggle = document.querySelector('.apps-toggle');
 const appsPanel = document.querySelector('.apps-panel');
 const appsSearch = document.querySelector('.apps-search');
 const appsList = document.querySelector('.apps-list');
-const weatherToggle = document.querySelector('.weather-toggle');
+const appsFavoritesList = document.querySelector('.apps-favorites-list');
+const appsFavoritesHint = document.querySelector('.apps-favorites-hint');
+const weatherIndicator = document.querySelector('.weather-indicator');
 const weatherPanel = document.querySelector('.weather-panel');
 const weatherZipForm = document.querySelector('.weather-zip-form');
 const weatherZipInput = document.querySelector('.weather-zip-input');
@@ -59,6 +61,16 @@ const centerToggle = document.querySelector('.center-toggle');
 const pillCenter = document.querySelector('.pill-center');
 const centerBubble = document.querySelector('.pill-center-bubble');
 const centerViews = document.querySelectorAll('.center-view');
+const extendingTiles = document.querySelectorAll('.center-tile[aria-expanded]');
+const centerWeatherTile = document.querySelector('.center-weather-tile');
+const centerWeatherIcon = document.querySelector('.center-weather-icon');
+const centerWeatherTemperature = document.querySelector('.center-weather-temperature');
+const centerWeatherSummary = document.querySelector('.center-weather-summary');
+const runningToggle = document.querySelector('.running-toggle');
+const pillRunning = document.querySelector('.pill-running');
+const runningBubble = document.querySelector('.pill-running-bubble');
+const runningList = document.querySelector('.running-list');
+const runningEmpty = document.querySelector('.running-empty');
 const centerVolumeSlider = document.querySelector('.center-volume-slider');
 const centerVolumeValue = document.querySelector('.center-volume-value');
 const nightLightTile = document.querySelector('[data-center-action="nightlight"]');
@@ -102,6 +114,7 @@ let currentNotification;
 let appsRequestId = 0;
 let appsPanelRequestId = 0;
 let launchableApps = [];
+const favoriteAppIds = loadFavoriteApps();
 let appSwitcherOpen = false;
 let appSwitcherWindows;
 let appSwitcherIndex = 0;
@@ -118,6 +131,8 @@ let editingWeatherZip = false;
 let centerOpen = false;
 let centerView = 'grid';
 let centerRequestId = 0;
+let runningOpen = false;
+let runningRequestId = 0;
 let togglingBatterySaver = false;
 let nightLightChange;
 let writingNightLight = false;
@@ -130,12 +145,13 @@ let nextNotificationId = 1;
 const motionEnabled = true;
 // The pill's spring takes about 650ms, so waits fall back a little after that.
 const transitionFallback = 900;
+const notificationDuration = 5500;
 
 function isMotionReduced() {
   return !motionEnabled || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
-// These state keys also serve as the data-weather-state values for styling the toggle.
+// These state keys also serve as the data-weather-state values for styling the forecast.
 const weatherStateNames = {
   clear: 'Clear',
   cloudy: 'Cloudy',
@@ -146,7 +162,7 @@ const weatherStateNames = {
   danger: 'Danger',
 };
 
-// Names of the weather toggle's icons in pill-icons; clear and cloudy have day and night versions.
+// Names of the weather icons in pill-icons; clear and cloudy have day and night versions.
 const weatherStateIcons = {
   clear: ['Clear Day', 'Clear Night'],
   cloudy: ['Cloudy Day', 'Cloudy Night'],
@@ -190,8 +206,9 @@ function getWeatherIconName(state, isDaytime) {
 
 const pillOptionTargets = new Map([
   ['music', musicToggle],
-  ['weather', weatherToggle],
+  ['weather', weatherIndicator],
   ['apps', appsToggle],
+  ['running', runningToggle],
   ['date', pillDate],
   ['time', pillClock],
   ['battery', batteryPercentage],
@@ -229,6 +246,9 @@ function applyPillOption(key) {
   target.inert = !enabled;
   optionButton.setAttribute('aria-pressed', String(enabled));
   optionButton.classList.toggle('is-disabled', !enabled);
+  if (key === 'weather') {
+    centerWeatherTile.hidden = !enabled;
+  }
 }
 
 function savePillOptions() {
@@ -372,7 +392,7 @@ function showNextNotification() {
   }
 
   // The toast takes over the pill, so the Pill Center bubble steps out of its way.
-  closePillCenter();
+  closeBubbles();
   notificationOpen = true;
   notificationApp.textContent = notification.appName || 'Windows';
   notificationTitle.textContent = notification.title || notification.appName || 'Notification';
@@ -388,7 +408,7 @@ function showNextNotification() {
 
   notificationTimer = notification.settingsNeeded
     ? undefined
-    : setTimeout(showNextNotification, 7000);
+    : setTimeout(showNextNotification, notificationDuration);
 }
 
 function enqueueNotification(notification) {
@@ -743,12 +763,19 @@ function renderWeather() {
   const current = report.current;
   const stateName = current ? weatherStateNames[current.state] : undefined;
 
-  weatherToggle.setAttribute('aria-label', stateName ? `Weather: ${stateName}` : 'Weather');
+  centerWeatherTile.setAttribute('aria-label', stateName ? `Weather: ${stateName}` : 'Weather');
+  weatherIndicator.hidden = !stateName;
+  centerWeatherIcon.hidden = !stateName;
   if (stateName) {
-    setPillIcon(weatherToggle, getWeatherIconName(current.state, current.isDaytime));
-    weatherToggle.dataset.weatherState = current.state;
+    const iconName = getWeatherIconName(current.state, current.isDaytime);
+    setPillIcon(weatherIndicator, iconName);
+    setPillIcon(centerWeatherIcon, iconName);
+  }
+  centerWeatherTemperature.textContent = current ? formatTemperature(current.temperature) : 'Weather';
+  if (current) {
+    centerWeatherSummary.textContent = current.description;
   } else {
-    delete weatherToggle.dataset.weatherState;
+    centerWeatherSummary.textContent = hasZip ? 'Loading weather...' : 'Set your zip code';
   }
 
   weatherSettingsChange.textContent = hasZip ? 'Change zip' : 'Set zip';
@@ -846,7 +873,6 @@ async function setWeatherPanelOpen(isOpen, resizeWindow = true) {
 
   const requestId = ++weatherPanelRequestId;
   weatherOpen = isOpen;
-  weatherToggle.setAttribute('aria-expanded', String(isOpen));
   weatherPanel.setAttribute('aria-hidden', String(!isOpen));
   weatherPanel.inert = !isOpen;
   if (isOpen) {
@@ -896,27 +922,77 @@ function switchWeatherToMusic() {
   });
 }
 
+function createAppItem(app) {
+  const item = document.createElement('div');
+  item.className = 'app-list-item';
+  item.setAttribute('role', 'listitem');
+  const button = document.createElement('button');
+  button.className = 'app-launch-button';
+  button.type = 'button';
+  button.dataset.appId = app.appId;
+  button.textContent = app.name;
+  item.append(button);
+  return item;
+}
+
 function renderLaunchableApps() {
   const query = appsSearch.value.trim().toLocaleLowerCase();
   const matchingApps = launchableApps.filter((app) => app.name.toLocaleLowerCase().includes(query));
-  appsList.replaceChildren();
+  appsList.classList.toggle('is-filtered', query !== '');
+  appsList.replaceChildren(...matchingApps.map(createAppItem));
+}
 
-  if (matchingApps.length === 0) {
+function loadFavoriteApps() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem('pill-favorite-apps'));
+    if (Array.isArray(saved)) {
+      return saved.filter((appId) => typeof appId === 'string');
+    }
+  } catch (error) {
+    console.error('Failed to read saved favorite apps:', error);
+  }
+  return [];
+}
+
+function saveFavoriteApps() {
+  try {
+    window.localStorage.setItem('pill-favorite-apps', JSON.stringify(favoriteAppIds));
+  } catch (error) {
+    console.error('Failed to save favorite apps:', error);
+  }
+}
+
+function updateFavoritesVisibility() {
+  const hasFavorites = appsFavoritesList.childElementCount > 0;
+  appsFavoritesList.hidden = !hasFavorites;
+  appsFavoritesHint.hidden = hasFavorites || launchableApps.length === 0;
+}
+
+// Favorites stay put while searching, so this only runs when the list of apps loads.
+function renderFavoriteApps() {
+  const favorites = favoriteAppIds
+    .map((appId) => launchableApps.find((app) => app.appId === appId))
+    .filter(Boolean);
+  appsFavoritesList.replaceChildren(...favorites.map(createAppItem));
+  updateFavoritesVisibility();
+}
+
+function addFavoriteApp(appId) {
+  const app = launchableApps.find((candidate) => candidate.appId === appId);
+  if (!app || favoriteAppIds.includes(appId)) {
     return;
   }
+  favoriteAppIds.push(appId);
+  saveFavoriteApps();
+  appsFavoritesList.append(createAppItem(app));
+  updateFavoritesVisibility();
+}
 
-  for (const app of matchingApps) {
-    const item = document.createElement('div');
-    item.className = 'app-list-item';
-    item.setAttribute('role', 'listitem');
-    const button = document.createElement('button');
-    button.className = 'app-launch-button';
-    button.type = 'button';
-    button.dataset.appId = app.appId;
-    button.textContent = app.name;
-    item.append(button);
-    appsList.append(item);
-  }
+function removeFavoriteApp(button) {
+  favoriteAppIds.splice(favoriteAppIds.indexOf(button.dataset.appId), 1);
+  saveFavoriteApps();
+  button.closest('.app-list-item').remove();
+  updateFavoritesVisibility();
 }
 
 async function refreshLaunchableApps() {
@@ -928,6 +1004,7 @@ async function refreshLaunchableApps() {
       return;
     }
     renderLaunchableApps();
+    renderFavoriteApps();
   } catch (error) {
     if (requestId !== appsRequestId) {
       return;
@@ -956,7 +1033,7 @@ async function setAppsPanelOpen(isOpen, resizeWindow = true) {
     setWeatherPanelOpen(false, false);
   }
   if (isOpen) {
-    closePillCenter(false);
+    closeBubbles(false);
     finishVolumeAdjustment();
   }
 
@@ -1041,9 +1118,10 @@ async function launchSelectedApp(button) {
     await window.pillApp.launchApp(button.dataset.appId);
     await collapsePill();
   } catch (error) {
-    button.disabled = false;
     console.error('Failed to launch Windows app:', error);
   }
+  // Favorites outlive the panel closing, unlike the rows of the main list.
+  button.disabled = false;
 }
 
 function renderMusicSession(session) {
@@ -1316,6 +1394,7 @@ async function showVolumeFromKey({ volume, muted }) {
     centerVolumeSlider.disabled = false;
     return;
   }
+  closeBubbles();
 
   clearTimeout(volumeKeyTimer);
   if (!expanded) {
@@ -1429,8 +1508,9 @@ async function openAppSwitcher() {
     || pill.classList.contains('apps-closing')
     || pill.classList.contains('music-open')
     || weatherOpen
-    || centerOpen;
-  closePillCenter(false);
+    || centerOpen
+    || runningOpen;
+  closeBubbles(false);
   if (appsOpen) {
     setAppsPanelOpen(false, false);
   }
@@ -1608,7 +1688,7 @@ async function collapsePill() {
   if (weatherOpen) {
     setWeatherPanelOpen(false, false);
   }
-  closePillCenter(false);
+  closeBubbles(false);
 
   animating = true;
   expanded = false;
@@ -1695,7 +1775,7 @@ async function openPillSettings() {
   if (weatherOpen) {
     await setWeatherPanelOpen(false);
   }
-  closePillCenter(false);
+  closeBubbles(false);
   finishVolumeAdjustment();
 
   if (!weatherSettingsInput.disabled) {
@@ -1774,8 +1854,9 @@ pill.addEventListener('mouseleave', (event) => {
     return;
   }
   if (expanded) {
-    // Moving from the pill into its Pill Center bubble keeps both open.
-    if (centerOpen && pillCenter.contains(event.relatedTarget)) {
+    // Moving from the pill into one of its bubbles keeps both open.
+    if ((centerOpen && pillCenter.contains(event.relatedTarget))
+      || (runningOpen && pillRunning.contains(event.relatedTarget))) {
       return;
     }
     if (!opening && !keyboardPinned) {
@@ -1786,14 +1867,21 @@ pill.addEventListener('mouseleave', (event) => {
   }
 });
 
-pillCenter.addEventListener('mouseleave', (event) => {
-  if (!centerOpen || notificationOpen || appSwitcherOpen || pill.contains(event.relatedTarget)) {
-    return;
-  }
-  if (expanded && !opening && !keyboardPinned) {
-    collapsePill();
-  }
-});
+for (const bubble of [pillCenter, pillRunning]) {
+  bubble.addEventListener('mouseleave', (event) => {
+    if (
+      (!centerOpen && !runningOpen)
+      || notificationOpen
+      || appSwitcherOpen
+      || pill.contains(event.relatedTarget)
+    ) {
+      return;
+    }
+    if (expanded && !opening && !keyboardPinned) {
+      collapsePill();
+    }
+  });
+}
 
 pill.addEventListener('contextmenu', (event) => {
   event.preventDefault();
@@ -1845,11 +1933,15 @@ document.addEventListener('keydown', (event) => {
     // Escape steps back out of a Pill Center view before closing the bubble.
     event.preventDefault();
     if (centerView === 'grid') {
-      closePillCenter();
+      closeBubbles();
       centerToggle.focus();
     } else {
       leaveCenterView();
     }
+  } else if (event.key === 'Escape' && runningOpen) {
+    event.preventDefault();
+    closeBubbles();
+    runningToggle.focus();
   } else if (event.key === 'Escape' && settingsOpen) {
     event.preventDefault();
     collapsePill();
@@ -1870,7 +1962,7 @@ pill.addEventListener('click', (event) => {
 
 musicToggle.addEventListener('click', async () => {
   const isOpen = musicToggle.getAttribute('aria-expanded') !== 'true';
-  closePillCenter(false);
+  closeBubbles(false);
   if (isOpen && (appsOpen || pill.classList.contains('apps-closing'))) {
     switchAppsToMusic();
     return;
@@ -1886,20 +1978,6 @@ musicToggle.addEventListener('click', async () => {
   setMusicControlsOpen(isOpen);
 });
 
-weatherToggle.addEventListener('click', () => {
-  const isOpen = !weatherOpen;
-  if (isOpen) {
-    if (appsOpen) {
-      setAppsPanelOpen(false, false);
-    }
-    if (pill.classList.contains('music-open')) {
-      setMusicControlsOpen(false, false);
-    }
-    closePillCenter(false);
-    finishVolumeAdjustment();
-  }
-  setWeatherPanelOpen(isOpen);
-});
 weatherZipForm.addEventListener('submit', (event) => {
   event.preventDefault();
   saveFirstWeatherZip();
@@ -1942,10 +2020,34 @@ window.pillApp.getWeather().then((report) => {
 
 appsToggle.addEventListener('click', () => setAppsPanelOpen(!appsOpen));
 appsSearch.addEventListener('input', renderLaunchableApps);
-appsList.addEventListener('click', (event) => {
+appsSearch.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || !appsSearch.value.trim()) {
+    return;
+  }
+  event.preventDefault();
+  const firstMatch = appsList.querySelector('.app-launch-button:not(:disabled)');
+  if (firstMatch) {
+    launchSelectedApp(firstMatch);
+  }
+});
+appsPanel.addEventListener('click', (event) => {
   const button = event.target.closest('.app-launch-button');
   if (button) {
     launchSelectedApp(button);
+  }
+});
+appsPanel.addEventListener('contextmenu', (event) => {
+  const button = event.target.closest('.app-launch-button');
+  if (!button) {
+    return;
+  }
+  // Right clicking anywhere else in the pill opens Pill Settings.
+  event.stopPropagation();
+  event.preventDefault();
+  if (appsFavoritesList.contains(button)) {
+    removeFavoriteApp(button);
+  } else {
+    addFavoriteApp(button.dataset.appId);
   }
 });
 
@@ -1988,24 +2090,26 @@ function isPanelOpen() {
   return settingsOpen || appsOpen || weatherOpen || appSwitcherOpen || pill.classList.contains('music-open');
 }
 
-// The bubble hangs under the center button, kept within the width of the pill.
-function placePillCenter() {
+// A bubble hangs under its button, kept within the width of the pill.
+function placeBubble(bubble, button) {
   const pillRect = pill.getBoundingClientRect();
-  const buttonRect = centerToggle.getBoundingClientRect();
-  const width = pillCenter.offsetWidth;
+  const buttonRect = button.getBoundingClientRect();
+  const width = bubble.offsetWidth;
   const buttonCenter = buttonRect.left + buttonRect.width / 2;
   const left = Math.min(Math.max(buttonCenter - width / 2, pillRect.left), pillRect.right - width);
-  pillCenter.style.left = `${left}px`;
-  pillCenter.style.setProperty('--center-origin', `${buttonCenter - left}px`);
+  bubble.style.left = `${left}px`;
+  bubble.style.setProperty('--center-origin', `${buttonCenter - left}px`);
 }
 
-async function openPillCenter() {
-  if (centerOpen || !expanded || settingsOpen || notificationOpen || animating || opening || appSwitcherOpen) {
-    return;
-  }
+function showBubble(bubble, button) {
+  placeBubble(bubble, button);
+  bubble.classList.add('is-open');
+  bubble.setAttribute('aria-hidden', 'false');
+  bubble.inert = false;
+}
 
-  const requestId = ++centerRequestId;
-  // Taller panels shrink back into the pill before the bubble buds off it.
+// Returns whether a taller panel was open, since it has to shrink back into the pill before a bubble buds off it.
+function closePanelsForBubble() {
   const shrinking = appsOpen || weatherOpen || pill.classList.contains('music-open');
   if (appsOpen) {
     setAppsPanelOpen(false, false);
@@ -2017,6 +2121,17 @@ async function openPillCenter() {
     setWeatherPanelOpen(false, false);
   }
   finishVolumeAdjustment();
+  return shrinking;
+}
+
+async function openPillCenter() {
+  if (centerOpen || !expanded || settingsOpen || notificationOpen || animating || opening || appSwitcherOpen) {
+    return;
+  }
+
+  closeBubbles(false);
+  const requestId = ++centerRequestId;
+  const shrinking = closePanelsForBubble();
   centerOpen = true;
   centerToggle.setAttribute('aria-expanded', 'true');
   showCenterView('grid');
@@ -2041,37 +2156,123 @@ async function openPillCenter() {
   if (requestId !== centerRequestId) {
     return;
   }
-  placePillCenter();
-  pillCenter.classList.add('is-open');
-  pillCenter.setAttribute('aria-hidden', 'false');
-  pillCenter.inert = false;
+  showBubble(pillCenter, centerToggle);
+}
+
+function renderRunningApps(windows) {
+  runningList.replaceChildren(...windows.map((openWindow) => {
+    const item = document.createElement('div');
+    item.className = 'running-app-item';
+    item.setAttribute('role', 'listitem');
+    const button = document.createElement('button');
+    button.className = 'center-option running-app';
+    button.type = 'button';
+    button.dataset.hwnd = String(openWindow.hwnd);
+    const name = document.createElement('span');
+    name.className = 'running-app-name';
+    name.textContent = openWindow.appName;
+    button.append(name);
+    if (openWindow.title !== openWindow.appName) {
+      const title = document.createElement('span');
+      title.className = 'running-app-title';
+      title.textContent = openWindow.title;
+      button.append(title);
+    }
+    item.append(button);
+    return item;
+  }));
+  runningEmpty.hidden = windows.length > 0;
+  runningBubble.style.setProperty('--running-rows', String(Math.max(windows.length, 1)));
+}
+
+async function refreshRunningApps() {
+  const requestId = ++runningRequestId;
+  let windows = [];
+  try {
+    windows = await window.pillApp.getOpenWindows();
+  } catch (error) {
+    console.error('Failed to load open apps:', error);
+  }
+  if (requestId === runningRequestId && runningOpen) {
+    renderRunningApps(windows);
+  }
+}
+
+async function openRunningApps() {
+  if (runningOpen || !expanded || settingsOpen || notificationOpen || animating || opening || appSwitcherOpen) {
+    return;
+  }
+
+  closeBubbles(false);
+  const requestId = ++centerRequestId;
+  const shrinking = closePanelsForBubble();
+  runningOpen = true;
+  runningToggle.setAttribute('aria-expanded', 'true');
+  refreshRunningApps();
+
+  try {
+    if (shrinking) {
+      await waitForPillTransition();
+      if (requestId !== centerRequestId) {
+        return;
+      }
+    }
+    await window.pillApp.setCenterOpen(true);
+  } catch (error) {
+    console.error('Failed to show open apps:', error);
+    if (requestId === centerRequestId) {
+      runningOpen = false;
+      runningToggle.setAttribute('aria-expanded', 'false');
+    }
+    return;
+  }
+  if (requestId !== centerRequestId) {
+    return;
+  }
+  showBubble(pillRunning, runningToggle);
+}
+
+async function switchToRunningApp(button) {
+  button.disabled = true;
+  try {
+    await window.pillApp.activateWindow(Number(button.dataset.hwnd));
+    await collapsePill();
+  } catch (error) {
+    console.error('Failed to switch to the selected app:', error);
+    // The app has most likely closed since the list was read.
+    refreshRunningApps();
+  }
 }
 
 // Pass false when something else is about to size the window, so the two don't fight.
-async function closePillCenter(resizeWindow = true) {
-  if (!centerOpen) {
+async function closeBubbles(resizeWindow = true) {
+  if (!centerOpen && !runningOpen) {
     return;
   }
 
   const requestId = ++centerRequestId;
+  const closingGlass = centerOpen ? centerBubble : runningBubble;
   centerOpen = false;
+  runningOpen = false;
   clearPowerConfirm();
-  centerToggle.setAttribute('aria-expanded', 'false');
-  pillCenter.classList.remove('is-open');
-  pillCenter.setAttribute('aria-hidden', 'true');
-  pillCenter.inert = true;
+  for (const [bubble, button] of [[pillCenter, centerToggle], [pillRunning, runningToggle]]) {
+    button.setAttribute('aria-expanded', 'false');
+    bubble.classList.remove('is-open');
+    bubble.setAttribute('aria-hidden', 'true');
+    bubble.inert = true;
+  }
   if (!resizeWindow) {
     return;
   }
 
-  await waitForTransition(centerBubble, 'opacity');
+  await waitForTransition(closingGlass, 'opacity');
   if (requestId !== centerRequestId || !expanded || isPanelOpen()) {
     return;
   }
   try {
     await window.pillApp.setCenterOpen(false);
   } catch (error) {
-    console.error('Failed to close the Pill Center:', error);
+    console.error('Failed to close the bubble:', error);
   }
 }
 
@@ -2084,6 +2285,9 @@ function showCenterView(view) {
     panel.classList.toggle('is-active', isActive);
     panel.setAttribute('aria-hidden', String(!isActive));
     panel.inert = !isActive;
+  }
+  for (const tile of extendingTiles) {
+    tile.setAttribute('aria-expanded', String(tile.dataset.centerAction === view));
   }
 }
 
@@ -2135,7 +2339,7 @@ function renderNightLight(state, updateSlider) {
   nightLightTile.setAttribute('aria-pressed', String(state.enabled));
   nightLightSwitch.setAttribute('aria-pressed', String(state.enabled));
   nightLightSwitch.disabled = !state.available;
-  nightLightSlider.disabled = !state.available || state.strength === null;
+  nightLightSlider.disabled = !state.available;
   nightLightStatus.textContent = state.available ? '' : 'Set up night light in Windows Settings first.';
   if (updateSlider && state.strength !== null) {
     setSliderValue(nightLightSlider, state.strength);
@@ -2157,7 +2361,7 @@ async function openCenterNightLight() {
   }
 }
 
-// Dragging the intensity slider fires faster than Windows can save, so only the latest change is written.
+// Windows can take longer to save a change than the next one takes to arrive, so only the latest is written.
 async function changeNightLight(change) {
   nightLightChange = { ...nightLightChange, ...change };
   if (writingNightLight) {
@@ -2203,6 +2407,21 @@ async function toggleBatterySaver() {
     console.error('Failed to change battery saver:', error);
   } finally {
     togglingBatterySaver = false;
+  }
+}
+
+// Unlike the other tiles, weather leaves the bubble for the full panel. The window waits for the pill to
+// finish growing over the bubble, so the bubble isn't cut off as it fades.
+async function openCenterWeather() {
+  closeBubbles(false);
+  setWeatherPanelOpen(true, false);
+  await waitForPillTransition();
+  if (weatherOpen) {
+    try {
+      await window.pillApp.setWeatherOpen(true);
+    } catch (error) {
+      console.error('Failed to open the weather panel:', error);
+    }
   }
 }
 
@@ -2326,6 +2545,7 @@ function openCenterNotifications() {
 }
 
 const centerActions = {
+  weather: openCenterWeather,
   volume: openCenterVolume,
   nightlight: openCenterNightLight,
   'battery-saver': toggleBatterySaver,
@@ -2339,16 +2559,33 @@ const centerActions = {
 
 centerToggle.addEventListener('click', () => {
   if (centerOpen) {
-    closePillCenter();
+    closeBubbles();
   } else {
     openPillCenter();
+  }
+});
+
+runningToggle.addEventListener('click', () => {
+  if (runningOpen) {
+    closeBubbles();
+  } else {
+    openRunningApps();
+  }
+});
+
+runningList.addEventListener('click', (event) => {
+  const button = event.target.closest('.running-app');
+  if (button) {
+    switchToRunningApp(button);
   }
 });
 
 centerBubble.addEventListener('click', (event) => {
   const tile = event.target.closest('[data-center-action]');
   const powerButton = event.target.closest('[data-power-action]');
-  if (tile) {
+  if (tile && tile.dataset.centerAction === centerView) {
+    leaveCenterView();
+  } else if (tile) {
     centerActions[tile.dataset.centerAction]();
   } else if (powerButton) {
     choosePowerOption(powerButton);
@@ -2370,9 +2607,12 @@ nightLightSwitch.addEventListener('click', () => {
 
 nightLightSlider.addEventListener('input', () => {
   setSliderValue(nightLightSlider, nightLightSlider.value);
-  const strength = Math.round(Number(nightLightSlider.value));
-  nightLightValue.value = `${strength}%`;
-  changeNightLight({ strength });
+  nightLightValue.value = `${Math.round(Number(nightLightSlider.value))}%`;
+});
+
+// Applying a strength blinks night light, so it waits for the handle to be let go.
+nightLightSlider.addEventListener('change', () => {
+  changeNightLight({ strength: Math.round(Number(nightLightSlider.value)) });
 });
 
 centerClear.addEventListener('click', () => {
@@ -2402,7 +2642,7 @@ const edgeWarpMinHeight = 20;
 const edgeWarpSettleDelay = 90;
 // Room around the glass that the filter covers. It has to reach content still showing while the glass
 // shrinks or springs past its size, or that content would be cut off. Taller than any glass gets.
-const edgeWarpRegionHeight = 420;
+const edgeWarpRegionHeight = 560;
 const edgeWarpRegionSides = 24;
 const edgeWarpFilters = new Map();
 
@@ -2462,9 +2702,10 @@ function getEdgeWarpFilter(width, height, radius, offsetX, offsetY) {
     return id;
   }
 
-  // Narrow glass has controls close to its sides, so only wide glass warps deeply there.
-  const sideDepth = width >= edgeWarpWideWidth ? edgeWarpDepth : edgeWarpShallowDepth;
-  const bottomDepth = height >= edgeWarpTallHeight ? edgeWarpDepth : edgeWarpShallowDepth;
+  // Narrow glass has controls close to its edges, so only wide glass warps deeply, and only if it's tall.
+  const isWide = width >= edgeWarpWideWidth;
+  const sideDepth = isWide ? edgeWarpDepth : edgeWarpShallowDepth;
+  const bottomDepth = isWide && height >= edgeWarpTallHeight ? edgeWarpDepth : edgeWarpShallowDepth;
   const svgNamespace = 'http://www.w3.org/2000/svg';
   const createPart = (name, attributes = {}) => {
     const part = document.createElementNS(svgNamespace, name);
@@ -2568,5 +2809,6 @@ if (edgeWarpEnabled) {
   document.body.append(filters);
   document.documentElement.dataset.edgeWarp = '';
   watchEdgeWarp(pill, pill.querySelector('.pill-content'));
-  watchEdgeWarp(document.querySelector('.pill-center-bubble'));
+  watchEdgeWarp(centerBubble);
+  watchEdgeWarp(runningBubble);
 }

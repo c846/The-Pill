@@ -23,8 +23,9 @@ const appsExpandedSize = { width: 480, height: 360 };
 const notificationSize = { width: 480, height: 120 };
 const appSwitcherSize = { width: 480, height: 58 };
 const weatherExpandedSize = { width: 480, height: 360 };
-// The Pill Center bubble hangs below the open pill, so the window grows to fit its tallest view.
-const centerExpandedSize = { width: 480, height: 330 };
+// The Pill Center bubble hangs below the open pill, so the window grows to fit it at its tallest:
+// the tiles with the notifications extended, plus the strip below that keeps the pointer inside it.
+const centerExpandedSize = { width: 480, height: 580 };
 // The pill springs a little past its size when it grows, so the window keeps clear room around it.
 const overshootMargin = { x: 12, bottom: 20 };
 const backdropMargin = 24;
@@ -64,6 +65,9 @@ const silentVolume = 0.001;
 const nightLightCoolest = 6500;
 const nightLightWarmest = 1200;
 const cloudStoreHeader = Buffer.from([0x43, 0x42, 0x01, 0x00]);
+// How long night light stays off while a new strength is applied. Windows has to notice the off state,
+// so writing the two back to back could be skipped over; much longer and the screen visibly flashes.
+const nightLightPulseDelay = 250;
 const powerActions = {
   lock: ['rundll32.exe', ['user32.dll,LockWorkStation']],
   shutdown: ['shutdown.exe', ['/s', '/t', '0']],
@@ -716,6 +720,10 @@ while ($true) {
       'nightlight-set' {
         if ($parts[2] -ne '-') { [PillWindows]::WriteNightLight('settings', $parts[2]) }
         if ($parts[1] -ne '-') { [PillWindows]::WriteNightLight('bluelightreductionstate', $parts[1]) }
+        if ($parts.Length -gt 3) {
+          Start-Sleep -Milliseconds ${nightLightPulseDelay}
+          [PillWindows]::WriteNightLight('bluelightreductionstate', $parts[3])
+        }
         $result = @{ written = $true }
       }
       'saver' { $result = @{ saver = [PillWindows]::EnergySaver() } }
@@ -972,6 +980,7 @@ async function setNightLight(enabled, strength) {
   const { state, settings } = await readNightLight();
   let newState = '-';
   let newSettings = '-';
+  let stateAfterPulse;
   if (typeof enabled === 'boolean') {
     if (!state) {
       throw new Error('Set up night light in Windows Settings first.');
@@ -1005,14 +1014,16 @@ async function setNightLight(enabled, strength) {
       payload = Buffer.concat([settings.payload.subarray(0, next), field, settings.payload.subarray(next)]);
     }
     newSettings = buildCloudStoreBlob(settings, payload);
-    // Saving the settings alone only takes effect at the next toggle, so a fresh copy of the on state
-    // follows them to get Windows to read the new strength now.
+    // Windows only reads a saved strength when night light turns on, and rewriting the on state unchanged
+    // doesn't count, so while it is on it goes off and straight back on to pick the strength up.
     if (newState === '-' && state && isNightLightOn(state)) {
-      newState = buildCloudStoreBlob(state, state.payload);
+      newState = buildCloudStoreBlob(state, state.payload.subarray(2));
+      stateAfterPulse = buildCloudStoreBlob(parseCloudStoreBlob(newState), state.payload);
     }
   }
   if (newState !== '-' || newSettings !== '-') {
-    await requestWindowHelper(`nightlight-set ${newState} ${newSettings}`);
+    const pulse = stateAfterPulse ? ` ${stateAfterPulse}` : '';
+    await requestWindowHelper(`nightlight-set ${newState} ${newSettings}${pulse}`);
   }
 }
 

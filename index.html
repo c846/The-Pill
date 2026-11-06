@@ -12,7 +12,7 @@
       <section class="notification-toast" aria-label="Windows notification" aria-hidden="true" inert>
         <div class="notification-header">
           <span class="notification-app"></span>
-          <button class="notification-close" type="button" aria-label="Dismiss notification">×</button>
+          <button class="notification-close" type="button" aria-label="Dismiss notification"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 2.5 7 7m0-7-7 7" /></svg></button>
         </div>
         <div class="notification-content">
           <strong class="notification-title"></strong>
@@ -45,6 +45,10 @@
               <span class="pill-settings-indicator" aria-hidden="true"></span>
               <span>Apps</span>
             </button>
+            <button class="pill-settings-option" type="button" data-pill-option="running" aria-pressed="true">
+              <span class="pill-settings-indicator" aria-hidden="true"></span>
+              <span>Open apps</span>
+            </button>
             <button class="pill-settings-option" type="button" data-pill-option="date" aria-pressed="true">
               <span class="pill-settings-indicator" aria-hidden="true"></span>
               <span>Date</span>
@@ -67,6 +71,10 @@
           <button class="apps-toggle" type="button" aria-label="Apps" aria-expanded="false" aria-controls="apps-panel">
             <img class="pill-icon pill-icon-light" src="pill-icons/Apps Light.png" alt="" draggable="false" />
             <img class="pill-icon pill-icon-dark" src="pill-icons/Apps Dark.png" alt="" draggable="false" />
+          </button>
+          <button class="running-toggle" type="button" aria-label="Open apps" aria-expanded="false" aria-controls="pill-running">
+            <img class="pill-icon pill-icon-light" src="pill-icons/Running Apps Light.png" alt="" draggable="false" />
+            <img class="pill-icon pill-icon-dark" src="pill-icons/Running Apps Dark.png" alt="" draggable="false" />
           </button>
         </div>
         <div class="volume-controls" id="volume-controls" aria-hidden="true" inert>
@@ -117,6 +125,10 @@
           <div class="apps-panel-header">
             <input class="apps-search" type="search" aria-label="Search apps" placeholder="Search apps" autocomplete="off" />
           </div>
+          <div class="apps-favorites">
+            <div class="apps-favorites-list" role="list" aria-label="Favorite apps" hidden></div>
+            <p class="apps-favorites-hint" hidden>Right-click an app to add it to favorites</p>
+          </div>
           <div class="apps-list" role="list" aria-label="Available apps"></div>
         </section>
         <section class="weather-panel" id="weather-panel" aria-hidden="true" inert aria-label="Weather forecast">
@@ -156,14 +168,13 @@
           <div class="app-switcher-track" role="status" aria-live="polite"></div>
         </section>
         <div class="pill-datetime">
-          <button class="weather-toggle" type="button" aria-label="Weather" aria-expanded="false" aria-controls="weather-panel">
-            <img class="pill-icon pill-icon-light" alt="" draggable="false" />
-            <img class="pill-icon pill-icon-dark" alt="" draggable="false" />
-            <span class="weather-toggle-label">Weather</span>
-          </button>
           <button class="center-toggle" type="button" aria-label="Pill Center" aria-expanded="false" aria-controls="pill-center">
             <time class="pill-date" aria-label="Current date"></time>
             <time class="pill-clock" aria-label="Current time"></time>
+            <span class="weather-indicator" aria-hidden="true" hidden>
+              <img class="pill-icon pill-icon-light" alt="" draggable="false" />
+              <img class="pill-icon pill-icon-dark" alt="" draggable="false" />
+            </span>
             <span class="battery-percentage" aria-label="Battery charge" hidden></span>
           </button>
         </div>
@@ -171,13 +182,24 @@
     </div>
     <div class="pill-center" id="pill-center" aria-hidden="true" inert>
       <section class="pill-center-bubble" aria-label="Pill Center" data-view="grid">
-        <div class="center-view center-grid" data-center-view="grid">
-          <button class="center-tile" type="button" data-center-action="volume">
+        <div class="center-content">
+        <div class="center-grid">
+          <button class="center-tile center-weather-tile" type="button" data-center-action="weather" aria-label="Weather">
+            <span class="center-weather-icon" aria-hidden="true" hidden>
+              <img class="pill-icon pill-icon-light" alt="" draggable="false" />
+              <img class="pill-icon pill-icon-dark" alt="" draggable="false" />
+            </span>
+            <span class="center-weather-text" aria-hidden="true">
+              <span class="center-weather-temperature">Weather</span>
+              <span class="center-weather-summary"></span>
+            </span>
+          </button>
+          <button class="center-tile" type="button" data-center-action="volume" aria-expanded="false">
             <img class="pill-icon pill-icon-light" src="pill-icons/Volume Light.png" alt="" draggable="false" />
             <img class="pill-icon pill-icon-dark" src="pill-icons/Volume Dark.png" alt="" draggable="false" />
             <span class="center-tile-label">Volume</span>
           </button>
-          <button class="center-tile" type="button" data-center-action="nightlight" aria-pressed="false">
+          <button class="center-tile" type="button" data-center-action="nightlight" aria-pressed="false" aria-expanded="false">
             <img class="pill-icon pill-icon-light" src="pill-icons/Nightlight Light.png" alt="" draggable="false" />
             <img class="pill-icon pill-icon-dark" src="pill-icons/Nightlight Dark.png" alt="" draggable="false" />
             <span class="center-tile-label">Night light</span>
@@ -192,12 +214,12 @@
             <img class="pill-icon pill-icon-dark" src="pill-icons/Windows Settings Dark.png" alt="" draggable="false" />
             <span class="center-tile-label">Settings</span>
           </button>
-          <button class="center-tile" type="button" data-center-action="power">
+          <button class="center-tile" type="button" data-center-action="power" aria-expanded="false">
             <img class="pill-icon pill-icon-light" src="pill-icons/Power Light.png" alt="" draggable="false" />
             <img class="pill-icon pill-icon-dark" src="pill-icons/Power Dark.png" alt="" draggable="false" />
             <span class="center-tile-label">Power</span>
           </button>
-          <button class="center-tile" type="button" data-center-action="notifications" aria-label="Notifications">
+          <button class="center-tile" type="button" data-center-action="notifications" aria-label="Notifications" aria-expanded="false">
             <img class="pill-icon pill-icon-light" src="pill-icons/Notifications Light.png" alt="" draggable="false" />
             <img class="pill-icon pill-icon-dark" src="pill-icons/Notifications Dark.png" alt="" draggable="false" />
             <span class="center-tile-label" aria-hidden="true">Notifications</span>
@@ -205,13 +227,13 @@
           </button>
         </div>
         <div class="center-view center-volume" data-center-view="volume" aria-hidden="true" inert>
-          <button class="center-back" type="button" aria-label="Back to Pill Center">‹</button>
+          <button class="center-back" type="button" aria-label="Back to Pill Center"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M8 2 4 6l4 4" /></svg></button>
           <input class="pill-slider center-volume-slider" id="center-volume-slider" type="range" min="0" max="100" step="any" value="50" aria-label="System volume" disabled />
           <output class="center-value center-volume-value" for="center-volume-slider">--%</output>
         </div>
         <div class="center-view center-nightlight" data-center-view="nightlight" aria-hidden="true" inert>
           <div class="center-header">
-            <button class="center-back" type="button" aria-label="Back to Pill Center">‹</button>
+            <button class="center-back" type="button" aria-label="Back to Pill Center"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M8 2 4 6l4 4" /></svg></button>
             <h2 class="center-title">Night light</h2>
             <button class="center-switch nightlight-switch" type="button" aria-label="Night light" aria-pressed="false" disabled>
               <span class="pill-settings-indicator" aria-hidden="true"></span>
@@ -226,7 +248,7 @@
         </div>
         <div class="center-view center-power" data-center-view="power" aria-hidden="true" inert>
           <div class="center-header">
-            <button class="center-back" type="button" aria-label="Back to Pill Center">‹</button>
+            <button class="center-back" type="button" aria-label="Back to Pill Center"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M8 2 4 6l4 4" /></svg></button>
             <h2 class="center-title">Power</h2>
           </div>
           <div class="center-options">
@@ -237,12 +259,22 @@
         </div>
         <div class="center-view center-notifications" data-center-view="notifications" aria-hidden="true" inert>
           <div class="center-header">
-            <button class="center-back" type="button" aria-label="Back to Pill Center">‹</button>
+            <button class="center-back" type="button" aria-label="Back to Pill Center"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M8 2 4 6l4 4" /></svg></button>
             <h2 class="center-title">Notifications</h2>
             <button class="center-clear" type="button" disabled>Clear</button>
           </div>
           <div class="center-notification-list" role="list" aria-label="Recent notifications"></div>
           <p class="center-empty">No notifications since The Pill started.</p>
+        </div>
+        </div>
+      </section>
+    </div>
+    <div class="pill-center pill-running" id="pill-running" aria-hidden="true" inert>
+      <section class="pill-center-bubble pill-running-bubble" aria-label="Open apps">
+        <div class="center-content running-content">
+          <h2 class="center-title running-title">Open apps</h2>
+          <div class="running-list" role="list" aria-label="Open apps"></div>
+          <p class="center-empty running-empty" hidden>No open apps</p>
         </div>
       </section>
     </div>

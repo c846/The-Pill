@@ -25,9 +25,6 @@
       "include": "installer.nsh"
     }
   },
-  "dependencies": {
-    "loudness": "^0.4.2"
-  },
   "devDependencies": {
     "electron": "^45.0.0",
     "electron-builder": "^26.18.0"

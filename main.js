@@ -11,7 +11,6 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
-const loudness = require('loudness');
 
 app.setName('The Pill');
 
@@ -59,8 +58,6 @@ let windowHelper;
 let listedWindowHandles = new Set();
 let watchingAppSwitcherRelease = false;
 const volumeKeyStep = 2;
-// The volume helper reads a plain 0 as no level at all and leaves the volume alone. Any fraction reaches silence.
-const silentVolume = 0.001;
 // Night light strength runs from 0% at 6500K to 100% at 1200K, matching the slider in Windows Settings.
 const nightLightCoolest = 6500;
 const nightLightWarmest = 1200;
@@ -487,6 +484,41 @@ public class PillWindowInfo {
   public string appName { get; set; }
 }
 
+// Core Audio interfaces for the speaker volume. Methods the pill never calls still hold their place in
+// the interface, because COM finds each method by its position.
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+class PillDeviceEnumerator {}
+
+[ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IPillDeviceEnumerator {
+  void EnumAudioEndpoints();
+  IPillDevice GetDefaultAudioEndpoint(int dataFlow, int role);
+}
+
+[ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IPillDevice {
+  [return: MarshalAs(UnmanagedType.IUnknown)]
+  object Activate(ref Guid iid, int context, IntPtr activationParams);
+}
+
+[ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IPillEndpointVolume {
+  void RegisterControlChangeNotify();
+  void UnregisterControlChangeNotify();
+  void GetChannelCount();
+  void SetMasterVolumeLevel();
+  void SetMasterVolumeLevelScalar(float level, ref Guid eventContext);
+  void GetMasterVolumeLevel();
+  float GetMasterVolumeLevelScalar();
+  void SetChannelVolumeLevel();
+  void SetChannelVolumeLevelScalar();
+  void GetChannelVolumeLevel();
+  void GetChannelVolumeLevelScalar();
+  void SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid eventContext);
+  [return: MarshalAs(UnmanagedType.Bool)]
+  bool GetMute();
+}
+
 public static class PillWindows {
   delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
@@ -702,6 +734,52 @@ public static class PillWindows {
   public static bool SetEnergySaver(bool on) {
     return RtlPublishWnfStateData(EnergySaverStateName, IntPtr.Zero, BitConverter.GetBytes(on ? 1 : 2), 4, IntPtr.Zero) == 0;
   }
+
+  // The default output device can change at any time, so it is looked up again for every request.
+  static IPillEndpointVolume GetEndpointVolume() {
+    IPillDeviceEnumerator enumerator = (IPillDeviceEnumerator)new PillDeviceEnumerator();
+    IPillDevice device = null;
+    try {
+      // Render devices, console role: the device the Windows volume flyout controls.
+      device = enumerator.GetDefaultAudioEndpoint(0, 0);
+      Guid iid = typeof(IPillEndpointVolume).GUID;
+      return (IPillEndpointVolume)device.Activate(ref iid, 23, IntPtr.Zero);
+    } finally {
+      if (device != null) {
+        Marshal.ReleaseComObject(device);
+      }
+      Marshal.ReleaseComObject(enumerator);
+    }
+  }
+
+  public static object[] ReadVolume() {
+    IPillEndpointVolume endpoint = GetEndpointVolume();
+    try {
+      return new object[] { (int)Math.Round(endpoint.GetMasterVolumeLevelScalar() * 100), endpoint.GetMute() };
+    } finally {
+      Marshal.ReleaseComObject(endpoint);
+    }
+  }
+
+  public static void SetVolume(int volume) {
+    IPillEndpointVolume endpoint = GetEndpointVolume();
+    try {
+      Guid eventContext = Guid.Empty;
+      endpoint.SetMasterVolumeLevelScalar(Math.Min(100, Math.Max(0, volume)) / 100f, ref eventContext);
+    } finally {
+      Marshal.ReleaseComObject(endpoint);
+    }
+  }
+
+  public static void SetMuted(bool muted) {
+    IPillEndpointVolume endpoint = GetEndpointVolume();
+    try {
+      Guid eventContext = Guid.Empty;
+      endpoint.SetMute(muted, ref eventContext);
+    } finally {
+      Marshal.ReleaseComObject(endpoint);
+    }
+  }
 }
 '@
 
@@ -728,6 +806,18 @@ while ($true) {
       }
       'saver' { $result = @{ saver = [PillWindows]::EnergySaver() } }
       'saver-set' { $result = @{ published = [PillWindows]::SetEnergySaver($parts[1] -eq '1') } }
+      'volume' {
+        $volume = [PillWindows]::ReadVolume()
+        $result = @{ volume = $volume[0]; muted = $volume[1] }
+      }
+      'volume-set' {
+        [PillWindows]::SetVolume([int]$parts[1])
+        $result = @{ written = $true }
+      }
+      'mute-set' {
+        [PillWindows]::SetMuted($parts[1] -eq '1')
+        $result = @{ written = $true }
+      }
       default { throw 'Unknown window helper request.' }
     }
   } catch {
@@ -743,15 +833,19 @@ function getWindowHelper() {
     return windowHelper;
   }
 
-  const encodedScript = Buffer.from(createWindowHelperScript(), 'utf16le').toString('base64');
+  // Encoded, the script outgrows the 32,767 character limit on a Windows command line,
+  // so it travels as plain text in an environment variable instead.
   const child = spawn('powershell.exe', [
     '-NoProfile',
     '-NonInteractive',
     '-WindowStyle',
     'Hidden',
-    '-EncodedCommand',
-    encodedScript,
-  ], { windowsHide: true });
+    '-Command',
+    '& ([ScriptBlock]::Create($env:PILL_WINDOW_HELPER))',
+  ], {
+    windowsHide: true,
+    env: { ...process.env, PILL_WINDOW_HELPER: createWindowHelperScript() },
+  });
   const helper = { process: child, pending: [] };
   windowHelper = helper;
 
@@ -1741,7 +1835,7 @@ function createWindow() {
       throw new Error('Unauthorized volume request');
     }
 
-    return loudness.getVolume();
+    return readSystemVolume().then(({ volume }) => volume);
   });
   ipcMain.handle('pill:get-battery-status', (event) => {
     if (event.sender !== window.webContents) {
@@ -1870,8 +1964,8 @@ function readVolumeKeyState() {
     return Promise.resolve(volumeKeyState);
   }
   if (!volumeKeyStateRead) {
-    volumeKeyStateRead = Promise.all([loudness.getVolume(), loudness.getMuted()])
-      .then(([volume, muted]) => {
+    volumeKeyStateRead = readSystemVolume()
+      .then(({ volume, muted }) => {
         volumeKeyState = { volume, muted };
         volumeKeyWritten = { volume, muted };
         return volumeKeyState;
@@ -1883,8 +1977,20 @@ function readVolumeKeyState() {
   return volumeKeyStateRead;
 }
 
+async function readSystemVolume() {
+  const { volume, muted } = await requestWindowHelper('volume');
+  if (!Number.isInteger(volume) || volume < 0 || volume > 100 || typeof muted !== 'boolean') {
+    throw new Error('Windows returned an invalid volume.');
+  }
+  return { volume, muted };
+}
+
 function setSystemVolume(volume) {
-  return loudness.setVolume(volume || silentVolume);
+  return requestWindowHelper(`volume-set ${volume}`);
+}
+
+function setSystemMuted(muted) {
+  return requestWindowHelper(`mute-set ${muted ? 1 : 0}`);
 }
 
 // A dragged slider sends levels faster than the volume helper runs, and separate runs can finish out
@@ -1923,7 +2029,7 @@ async function writeVolumeKeyState() {
     ) {
       const { volume, muted } = volumeKeyState;
       if (muted !== volumeKeyWritten.muted) {
-        await loudness.setMuted(muted);
+        await setSystemMuted(muted);
       }
       if (volume !== volumeKeyWritten.volume) {
         await setSystemVolume(volume);

@@ -1,6 +1,6 @@
 {
   "name": "the-pill",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "A pill-shaped desktop overlay for Windows.",
   "author": "c846",
   "main": "main.js",

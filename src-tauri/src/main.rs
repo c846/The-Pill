@@ -3,6 +3,7 @@
 
 mod apps;
 mod audio;
+mod backdrop;
 mod battery;
 mod hotkeys;
 mod media;
@@ -28,6 +29,7 @@ fn main() {
                 .ok_or("The pill window is missing from tauri.conf.json.")?;
             pill::init(&window)?;
             hotkeys::start();
+            backdrop::start();
             notifications::start();
             weather::start();
             apps::preload();
@@ -35,6 +37,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             pill::set_size,
+            backdrop::get_theme,
             audio::get_volume,
             audio::set_volume,
             battery::get_battery,

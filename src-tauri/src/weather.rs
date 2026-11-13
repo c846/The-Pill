@@ -41,6 +41,12 @@ struct Hour {
     temperature: Option<i32>,
     description: String,
     precipitation: Option<f64>,
+    #[serde(default = "daytime")]
+    is_daytime: bool,
+}
+
+fn daytime() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -66,6 +72,8 @@ struct Alert {
 struct Current {
     description: String,
     temperature: Option<i32>,
+    #[serde(default = "daytime")]
+    is_daytime: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -270,6 +278,7 @@ fn build_hours(periods: &[Value]) -> Vec<Hour> {
             temperature: temperature(period),
             description: text(&period["shortForecast"]),
             precipitation: precipitation(period),
+            is_daytime: period["isDaytime"].as_bool().unwrap_or(true),
         })
         .collect()
 }
@@ -324,9 +333,15 @@ fn build_current(observation: Option<&Value>, hours: &[Hour]) -> Option<Current>
     if observed_description.is_none() && next_hour.is_none() {
         return None;
     }
+    // Observation icons read like .../icons/land/night/few, which tells day from night.
+    let observed_daytime = properties
+        .filter(|_| observed_description.is_some())
+        .and_then(|p| p["icon"].as_str())
+        .map(|icon| !icon.contains("/night/"));
     Some(Current {
         description: observed_description.or_else(|| next_hour.map(|h| h.description.clone())).unwrap_or_default(),
         temperature: observed_temperature.or_else(|| next_hour.and_then(|h| h.temperature)),
+        is_daytime: observed_daytime.or_else(|| next_hour.map(|h| h.is_daytime)).unwrap_or(true),
     })
 }
 
@@ -451,6 +466,31 @@ pub fn resume() {
 
 // ---- The report the page shows ----
 
+/// The name of the pill's icon for a forecast, one of the files in ui/icons. Checked in order so the most
+/// severe match wins; None when nothing matches.
+fn icon(description: &str, is_daytime: bool) -> Option<&'static str> {
+    let text = description.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|word| text.contains(word));
+    let day_or_night = |day, night| if is_daytime { day } else { night };
+    Some(if has(&["tornado", "hurricane", "tropical storm", "blizzard"]) {
+        "danger"
+    } else if has(&["thunder", "t-storm"]) {
+        "thunderstorm"
+    } else if has(&["snow", "sleet", "flurr", "ice pellet", "wintry"]) {
+        "snowy"
+    } else if has(&["rain", "shower", "drizzle"]) {
+        "rainy"
+    } else if has(&["fog", "haze", "smoke", "dust", "mist"]) {
+        "smoggy"
+    } else if has(&["cloud", "overcast", "partly sunny"]) {
+        day_or_night("cloudy-day", "cloudy-night")
+    } else if has(&["sunny", "clear", "fair", "hot", "cold", "wind", "breez"]) {
+        day_or_night("clear-day", "clear-night")
+    } else {
+        return None;
+    })
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
@@ -460,6 +500,7 @@ pub struct Report {
     place: String,
     temperature: Option<i32>,
     description: String,
+    icon: Option<&'static str>,
     /// Severe and extreme alerts in effect now.
     alerts: Vec<String>,
     hourly: Vec<HourReport>,
@@ -470,18 +511,25 @@ pub struct Report {
 
 #[derive(Serialize, Clone)]
 pub struct HourReport {
+    /// The hour, like "3 PM".
     label: String,
+    /// "Today" or the short weekday, so the page can mark where each day starts.
+    day: String,
     temperature: Option<i32>,
     description: String,
+    icon: Option<&'static str>,
     precipitation: Option<f64>,
 }
 
 #[derive(Serialize, Clone)]
 pub struct DayReport {
     name: String,
+    /// "Today", "Tonight" or the short weekday, for labeling the week's graph.
+    short: String,
     high: Option<i32>,
     low: Option<i32>,
     description: String,
+    icon: Option<&'static str>,
     precipitation: Option<f64>,
     /// Every alert, of any severity, that overlaps this day.
     notices: Vec<String>,
@@ -495,6 +543,7 @@ fn report(state: &State) -> Report {
             place: String::new(),
             temperature: None,
             description: String::new(),
+            icon: None,
             alerts: Vec::new(),
             hourly: Vec::new(),
             daily: Vec::new(),
@@ -514,18 +563,17 @@ fn report(state: &State) -> Report {
     let hourly = upcoming(&saved.hourly)
         .take(48)
         .map(|hour| {
-            let label = parse_time(&hour.time)
-                .map(|time| {
-                    let local = time.with_timezone(&Local);
-                    // Hours after today also name their day.
-                    let format = if local.date_naive() == today { "%-I %p" } else { "%a %-I %p" };
-                    local.format(format).to_string()
-                })
+            let local = parse_time(&hour.time).map(|time| time.with_timezone(&Local));
+            let label = local.map(|time| time.format("%-I %p").to_string()).unwrap_or_default();
+            let day = local
+                .map(|time| if time.date_naive() == today { "Today".into() } else { time.format("%a").to_string() })
                 .unwrap_or_default();
             HourReport {
                 label,
+                day,
                 temperature: hour.temperature,
                 description: hour.description.clone(),
+                icon: icon(&hour.description, hour.is_daytime),
                 precipitation: hour.precipitation,
             }
         })
@@ -545,11 +593,22 @@ fn report(state: &State) -> Report {
                 })
                 .map(|alert| alert.event.clone())
                 .collect();
+            let short = parse_time(&day.start)
+                .map(|time| time.with_timezone(&Local))
+                .map(|time| match (time.date_naive() == today, day.high.is_some()) {
+                    (true, true) => "Today".into(),
+                    (true, false) => "Tonight".into(),
+                    _ => time.format("%a").to_string(),
+                })
+                .unwrap_or_else(|| day.name.chars().take(3).collect());
             DayReport {
                 name: day.name.clone(),
+                short,
                 high: day.high,
                 low: day.low,
                 description: day.description.clone(),
+                // A day that starts at night, like "Tonight", has no high and gets the night icon.
+                icon: icon(&day.description, day.high.is_some()),
                 precipitation: day.precipitation,
                 notices: notices.into_iter().collect(),
             }
@@ -578,6 +637,7 @@ fn report(state: &State) -> Report {
         place,
         temperature: saved.current.as_ref().and_then(|current| current.temperature),
         description: saved.current.as_ref().map(|current| current.description.clone()).unwrap_or_default(),
+        icon: saved.current.as_ref().and_then(|current| icon(&current.description, current.is_daytime)),
         alerts: severe.into_iter().collect(),
         hourly,
         daily,

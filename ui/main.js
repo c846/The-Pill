@@ -15,7 +15,98 @@ const VOLUME_FLASH_DURATION = 1500;
 const SEEK_SETTLE_DELAY = 2500;
 const POWER_CONFIRM_DURATION = 4000;
 
+// The idle pill, and the extra room around it that still counts as hovering it.
+const IDLE = { width: 132, height: 6 };
+const IDLE_ROOM = { width: 40, height: 6 };
+// The spring overshoots, so the window always has this much spare width, and this much spare height
+// while the pill grows.
+const SPRING_ROOM = { width: 40, height: 36 };
+// How long size changes take; these match #pill's transitions in style.css.
+const GROW_TIME = 500;
+const SHRINK_TIME = 340;
+const MAX_RADIUS = 20;
+
 const pill = $('#pill');
+const content = $('#content');
+
+// ---- Motion ----
+
+// A spring's settling curve as a CSS linear() easing, worked out once. Lower damping bounces more.
+function springEasing(damping) {
+  const steps = 48;
+  // Settles to within about 0.2% by the end of the animation.
+  const frequency = 6.5 / damping;
+  const damped = frequency * Math.sqrt(1 - damping * damping);
+  const points = [];
+  for (let step = 0; step <= steps; step += 1) {
+    const t = step / steps;
+    const decay = Math.exp(-damping * frequency * t);
+    const value = 1 - decay * (Math.cos(damped * t) + ((damping * frequency) / damped) * Math.sin(damped * t));
+    points.push(step === steps ? 1 : Number(value.toFixed(4)));
+  }
+  return `linear(${points.join(', ')})`;
+}
+
+const SPRING = springEasing(0.68); // growing and appearing: a soft rebound
+const SPRING_POP = springEasing(0.5); // small things like icons and dots: a livelier one
+const SPRING_OUT = springEasing(0.95); // leaving: quick, barely any rebound
+document.documentElement.style.setProperty('--spring', SPRING);
+document.documentElement.style.setProperty('--spring-pop', SPRING_POP);
+document.documentElement.style.setProperty('--spring-out', SPRING_OUT);
+
+/** Replays a short animation on an element, for things that change in place rather than appear. */
+function bump(element, keyframes, duration = 380, easing = SPRING_POP) {
+  element.animate(keyframes, { duration, easing });
+}
+
+// Text that changes in place slides in from the side a little.
+const SLIDE_IN = [{ opacity: 0, transform: 'translateX(8px)' }, { opacity: 1, transform: 'none' }];
+
+// ---- Theme ----
+
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme === 'dark' ? 'dark' : 'light';
+}
+
+// ---- Sliders ----
+
+/** Keeps a slider's filled part in step with its value. */
+function paintSlider(slider) {
+  const min = Number(slider.min) || 0;
+  const max = Number(slider.max) || 1;
+  const fraction = max > min ? (Number(slider.value) - min) / (max - min) : 0;
+  slider.style.setProperty('--fill', `${Math.min(100, Math.max(0, fraction * 100))}%`);
+}
+
+function setSlider(slider, value) {
+  slider.value = value;
+  paintSlider(slider);
+}
+
+for (const slider of $$('.slider')) {
+  slider.addEventListener('input', () => paintSlider(slider));
+  paintSlider(slider);
+}
+
+// ---- Icons ----
+
+function icon(name, className = 'icon') {
+  const image = document.createElement('img');
+  image.className = className;
+  image.src = `icons/${name}.png`;
+  image.alt = '';
+  image.draggable = false;
+  return image;
+}
+
+function glyph(name, className = 'glyph') {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', className);
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', `#g-${name}`);
+  svg.append(use);
+  return svg;
+}
 
 // Everything the pill is showing. render() turns this into the page.
 const ui = {
@@ -75,10 +166,27 @@ function isPinned() {
   return Boolean(ui.keyboard || ui.switcher || ui.toast || ui.volumeFlash || typing);
 }
 
+let closeTimer;
+
 function render() {
   const expanded = Boolean(ui.hover || ui.panel || isPinned());
-  pill.classList.toggle('collapsed', !expanded);
   pill.classList.toggle('idle-hidden', ui.idleHidden);
+
+  if (!expanded) {
+    // Closing fades the content while the glass shrinks around it, then hides it. What was showing is
+    // left as it is until then, so nothing jumps while it goes.
+    if (!pill.classList.contains('collapsed') && !pill.classList.contains('closing')) {
+      pill.classList.add('closing');
+      clearTimeout(closeTimer);
+      closeTimer = setTimeout(() => {
+        pill.classList.replace('closing', 'collapsed');
+      }, SHRINK_TIME);
+    }
+    updateSize();
+    return;
+  }
+  clearTimeout(closeTimer);
+  pill.classList.remove('collapsed', 'closing');
 
   const showMain = !ui.toast;
   $('#toast').hidden = !ui.toast;
@@ -97,18 +205,88 @@ function render() {
   for (const element of $$('[data-option]')) {
     element.hidden = !options[element.dataset.option];
   }
+  updateSize();
 }
 
-// The window is fitted to the pill whenever the pill's size changes.
-let lastSize = '';
-new ResizeObserver(() => {
-  const { width, height } = pill.getBoundingClientRect();
-  const size = `${width}x${height}`;
-  if (size === lastSize) {
+// ---- Sizing ----
+//
+// The glass springs to the size of #content. Resizing a window every frame would be slow and shaky, so the
+// window changes at most twice per change: it grows first, with room for the spring to overshoot, and is
+// trimmed to fit once the pill has settled.
+//
+// The window keeps one width and stays pinned to the top of the screen, so it only ever gets taller or
+// shorter downward. A window that changed width would be re-centered, and for a frame the old picture would
+// show in the new place, which looked like a twitch. The pill also waits for a bigger window to be in place
+// before growing, so the window's edge never cuts off its rounded corners.
+
+const WINDOW_WIDTH = 480 + SPRING_ROOM.width;
+// After a spring's set time, a little longer before trimming, so the window never clips it mid-motion.
+const SETTLE_MARGIN = 80;
+
+let pillSize = null;
+let windowHeight = 0;
+let sizeVersion = 0;
+let settleTimer;
+
+function isIdle() {
+  return pill.classList.contains('collapsed') || pill.classList.contains('closing');
+}
+
+function targetSize() {
+  return isIdle() ? IDLE : { width: content.offsetWidth, height: content.offsetHeight };
+}
+
+function updateSize() {
+  const target = targetSize();
+  if (pillSize && target.width === pillSize.width && target.height === pillSize.height) {
     return;
   }
-  lastSize = size;
-  invoke('set_size', { width, height })
+  const growing = !pillSize || target.width > pillSize.width || target.height > pillSize.height;
+  pillSize = target;
+  const version = ++sizeVersion;
+  clearTimeout(settleTimer);
+
+  const settledHeight = target.height + (target === IDLE ? IDLE_ROOM.height : 0);
+  const apply = () => {
+    // A newer size came along while waiting for the window, and that one wins.
+    if (version !== sizeVersion) {
+      return;
+    }
+    pill.dataset.motion = growing ? 'grow' : 'shrink';
+    pill.style.width = `${target.width}px`;
+    pill.style.height = `${target.height}px`;
+    pill.style.borderRadius = `${Math.min(MAX_RADIUS, target.height / 2)}px`;
+    settleTimer = setTimeout(
+      () => setWindowHeight(settledHeight),
+      (growing ? GROW_TIME : SHRINK_TIME) + SETTLE_MARGIN,
+    );
+  };
+
+  const roomy = settledHeight + (growing ? SPRING_ROOM.height : 0);
+  if (roomy > windowHeight) {
+    setWindowHeight(roomy).then(apply);
+  } else {
+    apply();
+  }
+}
+
+/** Resizes the window, resolving once the page has actually been given the new size. */
+function setWindowHeight(height) {
+  if (height === windowHeight) {
+    return Promise.resolve();
+  }
+  windowHeight = height;
+  const resized = new Promise((resolve) => {
+    const done = () => {
+      window.removeEventListener('resize', done);
+      clearTimeout(fallback);
+      requestAnimationFrame(() => resolve());
+    };
+    // In case Windows doesn't report a change, such as when the size was already right.
+    const fallback = setTimeout(done, 100);
+    window.addEventListener('resize', done);
+  });
+  invoke('set_size', { width: WINDOW_WIDTH, height })
     .then((mouseInside) => {
       // A window that shrinks away from a still mouse is never told the mouse left.
       if (!mouseInside && ui.hover) {
@@ -117,7 +295,17 @@ new ResizeObserver(() => {
       }
     })
     .catch((error) => console.error('Could not resize the pill:', error));
-}).observe(pill);
+  return resized;
+}
+
+// The window is wider than the idle pill, so only the pill and a little room around it open it.
+function overIdlePill(event) {
+  const reach = (IDLE.width + IDLE_ROOM.width) / 2;
+  return Math.abs(event.clientX - window.innerWidth / 2) <= reach;
+}
+
+// Content that changes size on its own, like a list that loads, resizes the pill too.
+new ResizeObserver(() => updateSize()).observe(content);
 
 let collapseTimer;
 function scheduleCollapse() {
@@ -139,13 +327,20 @@ function closeAll() {
   openPanel(null);
 }
 
-document.addEventListener('mouseover', () => {
+function onPointer(event) {
+  if (isIdle() && !overIdlePill(event)) {
+    return;
+  }
   clearTimeout(collapseTimer);
   if (!ui.hover) {
     ui.hover = true;
     render();
   }
-});
+}
+document.addEventListener('mouseover', onPointer);
+// Moving along the top into the idle pill's reach doesn't cross any element, so moves count too. This
+// only fires while the mouse is over the pill's own window.
+document.addEventListener('mousemove', onPointer);
 document.documentElement.addEventListener('mouseleave', () => {
   ui.hover = false;
   scheduleCollapse();
@@ -208,9 +403,17 @@ function updateClock() {
 }
 
 function showBattery(battery) {
-  $('#bar-battery').textContent = battery
-    ? `${battery.percentage}%${battery.isCharging ? ' charging' : ''}`
-    : '';
+  const element = $('#bar-battery');
+  element.classList.toggle('empty', !battery);
+  if (!battery) {
+    return;
+  }
+  const level = Math.min(100, Math.max(0, battery.percentage));
+  element.classList.toggle('low', level <= 15 && !battery.isCharging);
+  $('#bar-battery-value').textContent = String(level);
+  // An SVG element has no hidden property, so the attribute is set directly.
+  $('#bar-battery-bolt').toggleAttribute('hidden', !battery.isCharging);
+  element.title = battery.isCharging ? `${level}%, charging` : `${level}%`;
 }
 
 // ---- Toasts ----
@@ -233,9 +436,21 @@ function nextToast() {
     $('#toast-title').textContent = ui.toast.title || '';
     $('#toast-message').textContent = ui.toast.message || '';
     $('#toast-settings').hidden = ui.toast.kind !== 'settings';
+    const timer = $('#toast-timer');
+    timer.getAnimations().forEach((animation) => animation.cancel());
+    timer.hidden = ui.toast.kind === 'settings';
     // The settings prompt waits for the user; real notifications go away on their own.
     if (ui.toast.kind !== 'settings') {
       toastTimer = setTimeout(nextToast, TOAST_DURATION);
+      timer.animate([{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }], {
+        duration: TOAST_DURATION,
+        easing: 'linear',
+        fill: 'forwards',
+      });
+    }
+    // A notification that replaces another one pops in afresh.
+    if (!$('#toast').hidden) {
+      bump($('#toast'), [{ opacity: 0, transform: 'translateY(-6px) scale(0.97)' }, { opacity: 1, transform: 'none' }], 420, SPRING);
     }
   }
   render();
@@ -289,7 +504,8 @@ function showNotification(entry) {
 }
 
 function updateNotificationTile() {
-  $('#tile-notifications').textContent = unreadNotifications ? 'Notifications (new)' : 'Notifications';
+  $('#notifications-badge').hidden = !unreadNotifications;
+  $('#tile-notifications').title = unreadNotifications ? 'Notifications (new)' : 'Notifications';
 }
 
 async function showNotificationHistory() {
@@ -300,7 +516,7 @@ async function showNotificationHistory() {
     const item = document.createElement('div');
     item.className = 'item notification';
     const heading = document.createElement('div');
-    heading.className = 'dim';
+    heading.className = 'dim small';
     heading.textContent = `${entry.appName} · ${entry.time}`;
     const title = document.createElement('strong');
     title.textContent = entry.title;
@@ -323,8 +539,9 @@ $('#notifications-clear').addEventListener('click', async () => {
 let volumeFlashTimer;
 function showVolume({ volume, muted }) {
   ui.volumeFlash = { volume, muted };
-  $('#volume-flash-bar').value = muted ? 0 : volume;
-  $('#volume-flash-value').textContent = muted ? 'Muted' : `${volume}%`;
+  $('#volume-flash-bar').style.transform = `scaleX(${muted ? 0 : volume / 100})`;
+  $('#volume-flash-value').textContent = muted ? 'Muted' : String(volume);
+  $('#volume-flash-icon').classList.toggle('muted', Boolean(muted));
   if (ui.panel === 'center' && ui.view === 'volume') {
     showCenterVolume(volume);
   }
@@ -338,23 +555,29 @@ function showVolume({ volume, muted }) {
 }
 
 function showCenterVolume(volume) {
-  $('#center-volume').value = volume;
-  $('#center-volume-value').textContent = `${volume}%`;
+  setSlider($('#center-volume'), volume);
+  $('#center-volume-value').textContent = String(volume);
 }
 
 $('#center-volume').addEventListener('input', (event) => {
   const volume = Number(event.target.value);
-  $('#center-volume-value').textContent = `${volume}%`;
+  $('#center-volume-value').textContent = String(volume);
   invoke('set_volume', { volume }).catch(console.error);
 });
 
 // ---- App switcher (Alt+Space) ----
 
 function showSwitcher(selection) {
+  const stepping = Boolean(ui.switcher);
   ui.switcher = selection;
   $('#switcher-app').textContent = selection.appName;
-  $('#switcher-title').textContent = selection.title;
-  $('#switcher-count').textContent = selection.count > 1 ? `${selection.position} of ${selection.count}` : '';
+  $('#switcher-title').textContent = selection.title === selection.appName ? '' : selection.title;
+  $('#switcher-count').textContent = selection.count > 1 ? `${selection.position}/${selection.count}` : '';
+  // Each step slides the next app in.
+  if (stepping) {
+    bump($('#switcher-app'), SLIDE_IN, 300, SPRING);
+    bump($('#switcher-title'), SLIDE_IN, 340, SPRING);
+  }
   render();
 }
 
@@ -402,7 +625,18 @@ function renderMusic() {
   for (const id of ['#music-previous', '#music-toggle', '#music-next']) {
     $(id).disabled = !session;
   }
-  $('#music-toggle').textContent = session?.playing ? 'Pause' : 'Play';
+  const action = session?.playing ? 'Pause' : 'Play';
+  const toggleIcon = $('#music-toggle-icon');
+  if (toggleIcon.dataset.icon !== action) {
+    const changed = Boolean(toggleIcon.dataset.icon);
+    toggleIcon.dataset.icon = action;
+    toggleIcon.src = `icons/${action.toLowerCase()}.png`;
+    $('#music-toggle').title = action;
+    $('#music-toggle').setAttribute('aria-label', action);
+    if (changed) {
+      bump(toggleIcon, [{ opacity: 0, transform: 'scale(0.5)' }, { opacity: 1, transform: 'scale(1)' }]);
+    }
+  }
 
   const seek = $('#music-seek');
   const hasTimeline = Boolean(session && session.duration > 0);
@@ -411,9 +645,9 @@ function renderMusic() {
     seek.max = hasTimeline ? session.duration : 1;
     seek.value = hasTimeline ? session.position : 0;
   }
-  $('#music-time').textContent = hasTimeline
-    ? `${formatTime(Number(seek.value))} / ${formatTime(session.duration)}`
-    : '--:-- / --:--';
+  paintSlider(seek);
+  $('#music-elapsed').textContent = hasTimeline ? formatTime(Number(seek.value)) : '--:--';
+  $('#music-duration').textContent = hasTimeline ? formatTime(session.duration) : '--:--';
 }
 
 async function controlMusic(action, position = null) {
@@ -446,6 +680,7 @@ $('#music-seek').addEventListener('change', (event) => {
 let apps = [];
 
 async function showApps() {
+  $('#apps-hint').hidden = true;
   renderApps();
   try {
     apps = await invoke('get_apps');
@@ -496,8 +731,6 @@ function renderApps() {
     saveJson('pill-favorite-apps', favorites);
     renderApps();
   })));
-  $('#apps-hint').textContent = 'Right-click an app to add it to favorites.';
-  $('#apps-hint').hidden = searching || favoriteApps.length > 0;
   $('#apps-list').replaceChildren(...matchingApps().map((app) => appButton(app, () => {
     if (!favorites.includes(app.appId)) {
       favorites.push(app.appId);
@@ -566,14 +799,21 @@ function degrees(value) {
 
 function showWeather(report) {
   weather = report;
-  let text = '';
-  if (report.status === 'ready') {
-    text = report.temperature !== null ? degrees(report.temperature) : report.description;
-    if (report.alerts.length > 0) {
-      text = `Alert · ${text}`;
-    }
+  const ready = report.status === 'ready';
+  const alerting = ready && report.alerts.length > 0;
+  const barIcon = $('#bar-weather-icon');
+  const iconName = alerting ? 'danger' : ready ? report.icon : null;
+  barIcon.hidden = !iconName;
+  if (iconName) {
+    barIcon.src = `icons/${iconName}.png`;
   }
-  $('#bar-weather').textContent = text;
+  $('#bar-weather-temp').textContent = ready
+    ? report.temperature !== null ? degrees(report.temperature) : iconName ? '' : report.description
+    : '';
+  $('#bar-weather').classList.toggle('empty', !ready);
+  $('#bar-weather').title = ready
+    ? [...report.alerts, report.description].filter(Boolean).join(' · ')
+    : '';
   if (ui.panel === 'weather') {
     renderWeather();
   }
@@ -582,15 +822,22 @@ function showWeather(report) {
   }
 }
 
-function listItem(text) {
-  const item = document.createElement('div');
-  item.className = 'item';
-  item.textContent = text;
-  return item;
+function svg(name, attributes = {}) {
+  const element = document.createElementNS('http://www.w3.org/2000/svg', name);
+  for (const [key, value] of Object.entries(attributes)) {
+    element.setAttribute(key, value);
+  }
+  return element;
 }
 
-function chance(precipitation) {
-  return precipitation ? ` · ${Math.round(precipitation)}% precip.` : '';
+function rainChance(precipitation) {
+  const element = document.createElement('span');
+  element.className = 'rain';
+  if (precipitation) {
+    element.append(`${Math.round(precipitation)}%`);
+    element.title = `${Math.round(precipitation)}% chance of rain`;
+  }
+  return element;
 }
 
 function renderWeather() {
@@ -601,22 +848,259 @@ function renderWeather() {
   if (!ready) {
     return;
   }
-  $('#weather-now').textContent = [degrees(weather.temperature), weather.description].filter(Boolean).join(' ');
+  $('#weather-icon').hidden = !weather.icon;
+  if (weather.icon) {
+    $('#weather-icon').src = `icons/${weather.icon}.png`;
+  }
+  $('#weather-temp').textContent = degrees(weather.temperature);
+  $('#weather-desc').textContent = weather.description;
   $('#weather-place').textContent = weather.place || weather.zip;
+  $('#weather-refresh').title = weather.updated ? `Refresh (${weather.updated.toLowerCase()})` : 'Refresh';
   $('#weather-alerts').hidden = weather.alerts.length === 0;
-  $('#weather-alerts').textContent = weather.alerts.join(', ');
-  $('#weather-updated').textContent = weather.updated;
-  $('#weather-hourly').replaceChildren(...weather.hourly.map((hour) => listItem(
-    `${hour.label} · ${degrees(hour.temperature)} · ${hour.description}${chance(hour.precipitation)}`,
-  )));
-  $('#weather-daily').replaceChildren(...weather.daily.map((day) => {
-    const range = [day.high, day.low].filter((value) => value !== null).map(degrees).join(' / ');
-    const notices = day.notices.length > 0 ? ` · ${day.notices.join(', ')}` : '';
-    const item = listItem(`${day.name} · ${range} · ${day.description}${chance(day.precipitation)}${notices}`);
-    item.title = item.textContent;
-    item.classList.toggle('alert', day.notices.length > 0);
-    return item;
-  }));
+  $('#weather-alerts-text').textContent = weather.alerts.join(', ');
+  renderHourly();
+  renderWeek();
+}
+
+// The next 48 hours, side by side, with a marker where each new day starts.
+function renderHourly() {
+  const cells = [];
+  let lastDay = 'Today';
+  weather.hourly.forEach((hour, index) => {
+    if (hour.day !== lastDay) {
+      const marker = document.createElement('div');
+      marker.className = 'hour-day';
+      marker.textContent = hour.day;
+      cells.push(marker);
+      lastDay = hour.day;
+    }
+    const cell = document.createElement('div');
+    cell.className = 'hour';
+    cell.title = hour.description;
+    const label = document.createElement('span');
+    label.className = 'hour-label';
+    label.textContent = index === 0 ? 'Now' : hour.label;
+    const picture = hour.icon ? icon(hour.icon) : document.createElement('span');
+    picture.classList.add('icon');
+    const temperature = document.createElement('span');
+    temperature.className = 'hour-temp';
+    temperature.textContent = degrees(hour.temperature);
+    cell.append(label, picture, temperature, rainChance(hour.precipitation));
+    cells.push(cell);
+  });
+  const strip = $('#weather-hourly');
+  strip.replaceChildren(...cells);
+  strip.scrollLeft = 0;
+}
+
+// A mouse wheel scrolls the hourly strip sideways.
+$('#weather-hourly').addEventListener('wheel', (event) => {
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+    return;
+  }
+  event.preventDefault();
+  event.currentTarget.scrollBy({ left: event.deltaY, behavior: 'smooth' });
+}, { passive: false });
+
+// ---- The week's graph ----
+
+// Drawing units; the graph scales to the panel's width.
+const GRAPH = { width: 460, height: 156, left: 34, right: 8, top: 12, bottom: 46 };
+let weekDays = [];
+let weekPoints = [];
+
+function averageTemperature(day) {
+  const known = [day.high, day.low].filter((value) => value !== null && value !== undefined);
+  return known.length ? known.reduce((sum, value) => sum + value, 0) / known.length : null;
+}
+
+/** Round temperature marks that cover the week with a little room on each side. */
+function temperatureScale(values) {
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  let low = Math.floor((min - 2) / 5) * 5;
+  let high = Math.ceil((max + 2) / 5) * 5;
+  if (high - low < 10) {
+    high = low + 10;
+  }
+  const step = high - low <= 20 ? 5 : high - low <= 40 ? 10 : 20;
+  low = Math.floor(low / step) * step;
+  high = Math.ceil(high / step) * step;
+  const marks = [];
+  for (let value = low; value <= high; value += step) {
+    marks.push(value);
+  }
+  return { low, high, marks };
+}
+
+function renderWeek() {
+  const graph = $('#weather-graph');
+  hideTip(true);
+  weekDays = weather.daily;
+  const averages = weekDays.map(averageTemperature);
+  const known = averages.filter((value) => value !== null);
+  $('#weather-week').hidden = known.length === 0;
+  if (known.length === 0) {
+    graph.replaceChildren();
+    return;
+  }
+
+  const { width, height, left, right, top, bottom } = GRAPH;
+  const plotBottom = height - bottom;
+  const { low, high, marks } = temperatureScale(known);
+  const column = (width - left - right) / weekDays.length;
+  const x = (index) => left + column * (index + 0.5);
+  const y = (temperature) => top + ((high - temperature) / (high - low)) * (plotBottom - top);
+  graph.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+  const parts = [];
+  // Temperature marks on the left.
+  for (const mark of marks) {
+    parts.push(svg('line', { class: 'grid-line', x1: left - 4, x2: width - right, y1: y(mark), y2: y(mark) }));
+    const label = svg('text', { class: 'axis', x: left - 8, y: y(mark) + 3.5, 'text-anchor': 'end' });
+    label.textContent = `${mark}°`;
+    parts.push(label);
+  }
+
+  weekPoints = averages.map((value, index) => (value === null ? null : { x: x(index), y: y(value) }));
+
+  // The line through each day's average, broken where a day has no temperature.
+  let path = '';
+  let drawing = false;
+  for (const point of weekPoints) {
+    if (!point) {
+      drawing = false;
+      continue;
+    }
+    path += `${drawing ? 'L' : 'M'}${point.x.toFixed(1)} ${point.y.toFixed(1)}`;
+    drawing = true;
+  }
+  if (weekPoints.every(Boolean)) {
+    const first = weekPoints[0];
+    const last = weekPoints[weekPoints.length - 1];
+    parts.push(svg('path', { class: 'graph-area', d: `${path}L${last.x} ${plotBottom}L${first.x} ${plotBottom}Z` }));
+  }
+  parts.push(svg('path', { class: 'graph-line', d: path, pathLength: '1' }));
+
+  weekDays.forEach((day, index) => {
+    const group = svg('g', { class: 'graph-day', 'data-index': index });
+    group.append(svg('line', { class: 'graph-guide', x1: x(index), x2: x(index), y1: top - 4, y2: plotBottom }));
+    if (day.icon) {
+      const picture = svg('image', { class: 'graph-icon', href: `icons/${day.icon}.png`, x: x(index) - 8, y: plotBottom + 9, width: 16, height: 16 });
+      group.append(picture);
+    }
+    const label = svg('text', { class: 'day-label', x: x(index), y: height - 5 });
+    label.textContent = day.short;
+    group.append(label);
+    const point = weekPoints[index];
+    if (point) {
+      const dot = svg('circle', { class: 'graph-dot', cx: point.x, cy: point.y, r: 3 });
+      // The dots pop on one after another as the line reaches them.
+      dot.style.animationDelay = `${180 + index * 60}ms`;
+      group.append(dot);
+    }
+    // The whole column answers to the mouse, not just the small dot.
+    group.append(svg('rect', { class: 'graph-hit', x: x(index) - column / 2, y: 0, width: column, height }));
+    group.addEventListener('pointerenter', () => showDay(index));
+    parts.push(group);
+  });
+  graph.replaceChildren(...parts);
+}
+
+$('#weather-graph').addEventListener('pointerleave', () => hideTip());
+
+let activeDay = null;
+let tipHideTimer;
+
+function showDay(index) {
+  const day = weekDays[index];
+  if (!day || activeDay === index) {
+    return;
+  }
+  for (const group of $$('.graph-day')) {
+    const active = Number(group.dataset.index) === index;
+    group.classList.toggle('active', active);
+    group.querySelector('.graph-dot')?.classList.toggle('active', active);
+    group.querySelector('.graph-guide').classList.toggle('active', active);
+  }
+
+  const tip = $('#weather-tip');
+  const name = document.createElement('strong');
+  name.textContent = day.name;
+  const range = document.createElement('span');
+  range.textContent = [day.high !== null ? `High ${degrees(day.high)}` : '', day.low !== null ? `Low ${degrees(day.low)}` : '']
+    .filter(Boolean)
+    .join(' · ');
+  const description = document.createElement('span');
+  description.className = 'dim';
+  description.textContent = day.description;
+  const lines = [name, range, description];
+  if (day.precipitation) {
+    const rain = document.createElement('span');
+    rain.className = 'dim';
+    rain.textContent = `${Math.round(day.precipitation)}% chance of rain`;
+    lines.push(rain);
+  }
+  for (const notice of day.notices) {
+    const line = document.createElement('span');
+    line.className = 'alert';
+    line.append(icon('danger', 'icon small'), notice);
+    lines.push(line);
+  }
+  const body = document.createElement('div');
+  body.className = 'tip-body';
+  body.append(...lines);
+  tip.replaceChildren(...(day.icon ? [icon(day.icon, 'icon tip-icon')] : []), body);
+
+  const appearing = tip.hidden || tip.classList.contains('leaving');
+  clearTimeout(tipHideTimer);
+  tip.hidden = false;
+  tip.classList.remove('leaving');
+
+  // Beside the dot, on whichever side has more room, so the dot and its column stay in view.
+  const graph = $('#weather-graph');
+  const scale = graph.clientWidth / GRAPH.width;
+  const point = weekPoints[index] || { x: GRAPH.left + ((GRAPH.width - GRAPH.left - GRAPH.right) / weekDays.length) * (index + 0.5), y: GRAPH.top };
+  const dotX = point.x * scale;
+  const dotY = point.y * scale;
+  const tipWidth = tip.offsetWidth;
+  const tipHeight = tip.offsetHeight;
+  const gap = 14;
+  const onRight = dotX < graph.clientWidth / 2;
+  const left = Math.min(Math.max(onRight ? dotX + gap : dotX - gap - tipWidth, 0), graph.clientWidth - tipWidth);
+  const top = Math.min(Math.max(dotY - tipHeight / 2, 0), graph.clientHeight - tipHeight);
+  const transform = `translate(${left}px, ${top}px)`;
+
+  if (appearing) {
+    // Placed at once, then popped in. After that it glides between days.
+    tip.style.transition = 'none';
+    tip.style.transform = transform;
+    void tip.offsetWidth;
+    tip.style.transition = '';
+    bump(tip, [{ opacity: 0, scale: '0.85' }, { opacity: 1, scale: '1' }], 320);
+  } else {
+    tip.style.transform = transform;
+  }
+  activeDay = index;
+}
+
+function hideTip(immediately = false) {
+  activeDay = null;
+  for (const element of $$('.graph-day.active, .graph-dot.active, .graph-guide.active')) {
+    element.classList.remove('active');
+  }
+  const tip = $('#weather-tip');
+  clearTimeout(tipHideTimer);
+  if (immediately) {
+    tip.hidden = true;
+    tip.classList.remove('leaving');
+    return;
+  }
+  tip.classList.add('leaving');
+  tipHideTimer = setTimeout(() => {
+    tip.hidden = true;
+    tip.classList.remove('leaving');
+  }, 160);
 }
 
 async function saveZip(input, status) {
@@ -638,9 +1122,23 @@ $('#weather-zip-form').addEventListener('submit', (event) => {
   saveZip($('#weather-zip'), $('#weather-status')).then(() => renderWeather());
 });
 $('#weather-refresh').addEventListener('click', async () => {
-  $('#weather-updated').textContent = 'Refreshing…';
-  await invoke('refresh_weather');
-  showWeather(await invoke('get_weather'));
+  const button = $('#weather-refresh');
+  if (button.disabled) {
+    return;
+  }
+  button.disabled = true;
+  // Spins only while the refresh is under way.
+  const spin = button.querySelector('.glyph').animate(
+    [{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }],
+    { duration: 800, iterations: Infinity },
+  );
+  try {
+    await invoke('refresh_weather');
+    showWeather(await invoke('get_weather'));
+  } finally {
+    spin.cancel();
+    button.disabled = false;
+  }
 });
 
 // ---- Pill Center ----
@@ -663,9 +1161,9 @@ function refreshCenter() {
 }
 
 function updateWeatherTile() {
-  $('[data-tile="weather"]').textContent = weather.status === 'ready' && weather.temperature !== null
-    ? `Weather ${degrees(weather.temperature)}`
-    : 'Weather';
+  const ready = weather.status === 'ready';
+  $('#tile-weather-icon').src = `icons/${(ready && weather.icon) || 'clear-day'}.png`;
+  $('#tile-weather-temp').textContent = ready && weather.temperature !== null ? degrees(weather.temperature) : '';
 }
 
 async function updateSaverTile() {
@@ -677,7 +1175,7 @@ async function updateSaverTile() {
   const tile = $('#tile-saver');
   tile.disabled = batterySaver === null;
   tile.setAttribute('aria-pressed', String(batterySaver === true));
-  tile.textContent = batterySaver === null ? 'Battery saver' : `Battery saver ${batterySaver ? 'on' : 'off'}`;
+  tile.title = batterySaver === null ? 'Battery saver' : `Battery saver ${batterySaver ? 'on' : 'off'}`;
 }
 
 const tileActions = {
@@ -737,12 +1235,12 @@ async function loadNightLight(request) {
   }
   const toggle = $('#nightlight-toggle');
   toggle.disabled = !nightLight.available;
-  toggle.textContent = nightLight.enabled ? 'On' : 'Off';
-  toggle.setAttribute('aria-pressed', String(nightLight.enabled));
+  toggle.setAttribute('aria-checked', String(Boolean(nightLight.enabled)));
+  toggle.title = nightLight.enabled ? 'On' : 'Off';
   const slider = $('#nightlight-strength');
   slider.disabled = !nightLight.available;
   if (nightLight.strength !== null) {
-    slider.value = nightLight.strength;
+    setSlider(slider, nightLight.strength);
   }
   $('#nightlight-value').textContent = nightLight.strength === null ? '--%' : `${nightLight.strength}%`;
 }
@@ -765,6 +1263,7 @@ function clearPowerConfirm() {
   powerConfirm = null;
   for (const button of $$('[data-power]')) {
     button.textContent = POWER_LABELS[button.dataset.power];
+    button.classList.remove('confirm');
   }
 }
 
@@ -776,6 +1275,7 @@ for (const button of $$('[data-power]')) {
       clearPowerConfirm();
       powerConfirm = action;
       button.textContent = `Click again to ${POWER_LABELS[action].toLowerCase()}`;
+      button.classList.add('confirm');
       powerConfirmTimer = setTimeout(clearPowerConfirm, POWER_CONFIRM_DURATION);
       return;
     }
@@ -795,12 +1295,25 @@ function renderSettings() {
   $('#settings-options').replaceChildren(...Object.entries(OPTION_NAMES).map(([key, name]) => {
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = `${options[key] ? 'Shown' : 'Hidden'} · ${name}`;
-    button.setAttribute('aria-pressed', String(options[key]));
+    button.className = 'option';
+    button.setAttribute('role', 'switch');
+    const label = document.createElement('span');
+    label.textContent = name;
+    // Looks like a switch; the whole row is what gets clicked.
+    const toggle = document.createElement('span');
+    toggle.className = 'switch';
+    toggle.setAttribute('aria-hidden', 'true');
+    toggle.append(Object.assign(document.createElement('span'), { className: 'knob' }));
+    button.append(label, toggle);
+    const paint = () => {
+      button.setAttribute('aria-checked', String(options[key]));
+      toggle.setAttribute('aria-checked', String(options[key]));
+    };
+    paint();
     button.addEventListener('click', () => {
       options[key] = !options[key];
       saveJson('pill-options', options);
-      renderSettings();
+      paint();
       render();
     });
     return button;
@@ -832,6 +1345,7 @@ async function start() {
         openAppsSearch();
       }
     }),
+    listen('theme', ({ payload }) => setTheme(payload)),
     listen('volume', ({ payload }) => showVolume(payload)),
     listen('battery', ({ payload }) => showBattery(payload)),
     listen('weather', ({ payload }) => showWeather(payload)),
@@ -844,6 +1358,7 @@ async function start() {
       scheduleCollapse();
     }),
   ]);
+  setTheme(await invoke('get_theme'));
   showBattery(await invoke('get_battery'));
   showWeather(await invoke('get_weather'));
   handleNotificationAccess(await invoke('get_notification_status'));

@@ -1,6 +1,6 @@
 //! The pill's own window: its size, its place at the top of the screen, and its focus.
 
-use crate::util::err;
+use crate::{backdrop, util::err};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY};
@@ -56,6 +56,8 @@ pub fn set_size(width: f64, height: f64) -> Result<bool, String> {
         let y = area.top;
         // Reapplying topmost on every resize keeps the pill above other always-on-top windows.
         SetWindowPos(hwnd(), Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW).map_err(err)?;
+        // A bigger pill covers different screen, so the look may need to change.
+        backdrop::nudge();
 
         let mut cursor = POINT::default();
         let inside = GetCursorPos(&mut cursor).is_ok()

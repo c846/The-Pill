@@ -6,158 +6,221 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- Small line glyphs for things the icon set has no picture for. They draw in the text color. -->
+  <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+    <symbol id="g-close" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7m0-7-7 7" /></symbol>
+    <symbol id="g-back" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></symbol>
+    <symbol id="g-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3" /></symbol>
+    <symbol id="g-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></symbol>
+    <symbol id="g-drop" viewBox="0 0 16 16"><path d="M8 2.5s4 4.4 4 7.2a4 4 0 0 1-8 0c0-2.8 4-7.2 4-7.2z" /></symbol>
+    <symbol id="g-bolt" viewBox="0 0 16 16"><path d="M9 1.5 4 9h4l-1 5.5L12 7H8z" /></symbol>
+  </svg>
+
   <div id="pill" class="collapsed">
-    <!-- A Windows notification takes over the pill while it shows. -->
-    <section id="toast" hidden>
-      <div class="row">
-        <strong id="toast-app"></strong>
-        <button id="toast-close" type="button" aria-label="Dismiss notification">✕</button>
-      </div>
-      <div id="toast-title"></div>
-      <div id="toast-message" class="dim"></div>
-      <button id="toast-settings" type="button" hidden>Open notification settings</button>
-    </section>
+    <!-- The pill's glass is sized to this, and it stays centered while the glass springs around it. -->
+    <div id="content">
+      <!-- A Windows notification takes over the pill while it shows. -->
+      <section id="toast" hidden>
+        <div class="row">
+          <img class="icon small" src="icons/notifications.png" alt="" draggable="false" />
+          <span id="toast-app" class="dim small grow ellipsis"></span>
+          <button id="toast-close" class="icon-button" type="button" aria-label="Dismiss notification" title="Dismiss">
+            <svg class="glyph"><use href="#g-close" /></svg>
+          </button>
+        </div>
+        <strong id="toast-title"></strong>
+        <div id="toast-message" class="dim"></div>
+        <button id="toast-settings" class="solid" type="button" hidden>Open notification settings</button>
+        <div id="toast-timer" class="timer"></div>
+      </section>
 
-    <div id="bar" hidden>
-      <div class="group">
-        <button type="button" data-open="music" data-option="music">Music</button>
-        <button type="button" data-open="apps" data-option="apps">Apps</button>
-        <button type="button" data-open="running" data-option="running">Open apps</button>
+      <div id="bar" hidden>
+        <div class="group">
+          <button class="icon-button" type="button" data-open="music" data-option="music" aria-label="Music" title="Music">
+            <img class="icon" src="icons/music.png" alt="" draggable="false" />
+          </button>
+          <button class="icon-button" type="button" data-open="apps" data-option="apps" aria-label="Apps" title="Apps">
+            <img class="icon" src="icons/apps.png" alt="" draggable="false" />
+          </button>
+          <button class="icon-button" type="button" data-open="running" data-option="running" aria-label="Open apps" title="Open apps">
+            <img class="icon" src="icons/running-apps.png" alt="" draggable="false" />
+          </button>
+        </div>
+        <button id="status" type="button" data-open="center" title="Pill Center" aria-label="Pill Center">
+          <span id="bar-weather" class="empty" data-option="weather">
+            <img id="bar-weather-icon" class="icon small" alt="" draggable="false" hidden />
+            <span id="bar-weather-temp"></span>
+          </span>
+          <span id="bar-date" data-option="date"></span>
+          <span id="bar-time" data-option="time"></span>
+          <span id="bar-battery" class="empty" data-option="battery">
+            <span id="bar-battery-value"></span>
+            <svg id="bar-battery-bolt" class="glyph small filled" hidden><use href="#g-bolt" /></svg>
+          </span>
+        </button>
       </div>
-      <button id="status" type="button" data-open="center" title="Pill Center">
-        <span id="bar-weather" data-option="weather"></span>
-        <span id="bar-date" data-option="date"></span>
-        <span id="bar-time" data-option="time"></span>
-        <span id="bar-battery" data-option="battery"></span>
-      </button>
+
+      <div id="switcher" hidden>
+        <strong id="switcher-app" class="ellipsis"></strong>
+        <span id="switcher-title" class="dim grow ellipsis"></span>
+        <span id="switcher-count" class="dim small"></span>
+      </div>
+
+      <div id="volume-flash" hidden>
+        <span id="volume-flash-icon" class="icon-slot"><img class="icon" src="icons/volume.png" alt="" draggable="false" /></span>
+        <div class="meter"><div id="volume-flash-bar" class="meter-fill"></div></div>
+        <span id="volume-flash-value" class="value"></span>
+      </div>
+
+      <section class="panel" data-panel="music" hidden>
+        <div class="row">
+          <span class="art"><img class="icon" src="icons/music.png" alt="" draggable="false" /></span>
+          <div class="grow stack">
+            <strong id="music-title" class="ellipsis">Nothing playing</strong>
+            <span id="music-artist" class="dim small ellipsis"></span>
+          </div>
+        </div>
+        <div class="row">
+          <span id="music-elapsed" class="dim small value left">--:--</span>
+          <input id="music-seek" class="slider" type="range" min="0" max="1" step="any" value="0" aria-label="Track position" disabled />
+          <span id="music-duration" class="dim small value">--:--</span>
+        </div>
+        <div class="row center">
+          <button id="music-previous" class="icon-button" type="button" aria-label="Previous track" title="Previous" disabled>
+            <img class="icon" src="icons/previous.png" alt="" draggable="false" />
+          </button>
+          <button id="music-toggle" class="icon-button big" type="button" aria-label="Play" title="Play" disabled>
+            <img id="music-toggle-icon" class="icon" src="icons/play.png" alt="" draggable="false" />
+          </button>
+          <button id="music-next" class="icon-button" type="button" aria-label="Next track" title="Next" disabled>
+            <img class="icon" src="icons/next.png" alt="" draggable="false" />
+          </button>
+        </div>
+        <div id="music-status" class="dim small"></div>
+      </section>
+
+      <section class="panel" data-panel="apps" hidden>
+        <label class="search">
+          <svg class="glyph"><use href="#g-search" /></svg>
+          <input id="apps-search" type="search" placeholder="Search" aria-label="Search apps" autocomplete="off" />
+        </label>
+        <div id="apps-favorites" class="list" hidden></div>
+        <div id="apps-hint" class="dim small" hidden></div>        <div id="apps-list" class="list scroll"></div>
+      </section>
+
+      <section class="panel" data-panel="running" hidden>
+        <div id="running-list" class="list scroll"></div>
+        <div id="running-empty" class="dim small" hidden>No open apps</div>
+      </section>
+
+      <section class="panel" data-panel="weather" hidden>
+        <form id="weather-zip-form" class="row" hidden>
+          <img class="icon" src="icons/clear-day.png" alt="" draggable="false" />
+          <input id="weather-zip" type="text" inputmode="numeric" maxlength="5" placeholder="Zip code for weather.gov" aria-label="Zip code" />
+          <button class="solid" type="submit">Save</button>
+        </form>
+        <div id="weather-body" class="stack" hidden>
+          <div class="row weather-now">
+            <img id="weather-icon" class="icon huge" alt="" draggable="false" hidden />
+            <span id="weather-temp" class="big"></span>
+            <div class="grow stack">
+              <span id="weather-desc" class="ellipsis"></span>
+              <span id="weather-place" class="dim small ellipsis"></span>
+            </div>
+            <button id="weather-refresh" class="icon-button" type="button" aria-label="Refresh weather">
+              <svg class="glyph"><use href="#g-refresh" /></svg>
+            </button>
+          </div>
+          <div id="weather-alerts" class="row alert" hidden>
+            <img class="icon small" src="icons/danger.png" alt="" draggable="false" />
+            <span id="weather-alerts-text" class="grow"></span>
+          </div>
+          <div id="weather-hourly" class="hourly"></div>
+          <div id="weather-week" class="week">
+            <svg id="weather-graph" aria-label="This week's temperatures"></svg>
+            <div id="weather-tip" class="tip" hidden></div>
+          </div>
+        </div>
+        <div id="weather-status" class="dim small"></div>
+      </section>
+
+      <section class="panel" data-panel="center" hidden>
+        <div data-view="grid" class="tiles">
+          <button class="tile" type="button" data-tile="weather" aria-label="Weather" title="Weather">
+            <img id="tile-weather-icon" class="icon" src="icons/clear-day.png" alt="" draggable="false" />
+            <span id="tile-weather-temp" class="tile-value"></span>
+          </button>
+          <button class="tile" type="button" data-tile="volume" aria-label="Volume" title="Volume">
+            <img class="icon" src="icons/volume.png" alt="" draggable="false" />
+          </button>
+          <button class="tile" type="button" data-tile="nightlight" aria-label="Night light" title="Night light">
+            <img class="icon" src="icons/nightlight.png" alt="" draggable="false" />
+          </button>
+          <button class="tile" type="button" data-tile="saver" id="tile-saver" aria-label="Battery saver" title="Battery saver">
+            <img class="icon" src="icons/battery-saver.png" alt="" draggable="false" />
+          </button>
+          <button class="tile" type="button" data-tile="settings" aria-label="Windows Settings" title="Windows Settings">
+            <img class="icon" src="icons/windows-settings.png" alt="" draggable="false" />
+          </button>
+          <button class="tile" type="button" data-tile="power" aria-label="Power" title="Power">
+            <img class="icon" src="icons/power.png" alt="" draggable="false" />
+          </button>
+          <button class="tile" type="button" data-tile="notifications" id="tile-notifications" aria-label="Notifications" title="Notifications">
+            <img class="icon" src="icons/notifications.png" alt="" draggable="false" />
+            <span id="notifications-badge" class="badge" hidden></span>
+          </button>
+        </div>
+
+        <div data-view="volume" class="row" hidden>
+          <button class="icon-button back" type="button" aria-label="Back" title="Back"><svg class="glyph"><use href="#g-back" /></svg></button>
+          <img class="icon" src="icons/volume.png" alt="" draggable="false" />
+          <input id="center-volume" class="slider" type="range" min="0" max="100" step="1" value="0" aria-label="System volume" />
+          <span id="center-volume-value" class="value">--%</span>
+        </div>
+
+        <div data-view="nightlight" hidden>
+          <div class="row">
+            <button class="icon-button back" type="button" aria-label="Back" title="Back"><svg class="glyph"><use href="#g-back" /></svg></button>
+            <img class="icon" src="icons/nightlight.png" alt="" draggable="false" />
+            <input id="nightlight-strength" class="slider" type="range" min="0" max="100" step="1" value="50" aria-label="Night light intensity" disabled />
+            <span id="nightlight-value" class="value">--%</span>
+            <button id="nightlight-toggle" class="switch" type="button" role="switch" aria-checked="false" aria-label="Night light" disabled><span class="knob"></span></button>
+          </div>
+          <div id="nightlight-status" class="dim small"></div>
+        </div>
+
+        <div data-view="power" class="row" hidden>
+          <button class="icon-button back" type="button" aria-label="Back" title="Back"><svg class="glyph"><use href="#g-back" /></svg></button>
+          <img class="icon" src="icons/power.png" alt="" draggable="false" />
+          <div class="row grow power-buttons">
+            <button class="solid" type="button" data-power="lock">Lock</button>
+            <button class="solid" type="button" data-power="shutdown">Shut down</button>
+            <button class="solid" type="button" data-power="restart">Restart</button>
+          </div>
+        </div>
+
+        <div data-view="notifications" hidden>
+          <div class="row">
+            <button class="icon-button back" type="button" aria-label="Back" title="Back"><svg class="glyph"><use href="#g-back" /></svg></button>
+            <img class="icon" src="icons/notifications.png" alt="" draggable="false" />
+            <span class="grow"></span>
+            <button id="notifications-clear" class="solid" type="button">Clear</button>
+          </div>
+          <div id="notifications-list" class="list scroll"></div>
+          <div id="notifications-empty" class="dim empty-note">No notifications.</div>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="settings" hidden>
+        <div id="settings-options" class="options"></div>
+        <form id="settings-zip-form" class="row">
+          <img class="icon" src="icons/clear-day.png" alt="" draggable="false" />
+          <input id="settings-zip" type="text" inputmode="numeric" maxlength="5" placeholder="Zip code" aria-label="Weather zip code" />
+          <button class="solid" type="submit">Save</button>
+        </form>
+        <div id="settings-status" class="dim small"></div>
+      </section>
     </div>
-
-    <div id="switcher" hidden>
-      <strong id="switcher-app"></strong>
-      <span id="switcher-title" class="dim"></span>
-      <span id="switcher-count" class="dim"></span>
-    </div>
-
-    <div id="volume-flash" hidden>
-      <span>Volume</span>
-      <progress id="volume-flash-bar" max="100" value="0"></progress>
-      <span id="volume-flash-value"></span>
-    </div>
-
-    <section class="panel" data-panel="music" hidden>
-      <strong id="music-title">Nothing playing</strong>
-      <div id="music-artist" class="dim"></div>
-      <div class="row">
-        <input id="music-seek" type="range" min="0" max="1" step="any" value="0" aria-label="Track position" disabled />
-        <span id="music-time" class="dim">--:-- / --:--</span>
-      </div>
-      <div class="row buttons">
-        <button id="music-previous" type="button" disabled>Previous</button>
-        <button id="music-toggle" type="button" disabled>Play</button>
-        <button id="music-next" type="button" disabled>Next</button>
-      </div>
-      <div id="music-status" class="dim"></div>
-    </section>
-
-    <section class="panel" data-panel="apps" hidden>
-      <input id="apps-search" type="search" placeholder="Search apps" aria-label="Search apps" autocomplete="off" />
-      <div id="apps-favorites" class="list" hidden></div>
-      <div id="apps-hint" class="dim">Right-click an app to add it to favorites.</div>
-      <div id="apps-list" class="list scroll"></div>
-    </section>
-
-    <section class="panel" data-panel="running" hidden>
-      <div id="running-list" class="list scroll"></div>
-      <div id="running-empty" class="dim" hidden>No open apps</div>
-    </section>
-
-    <section class="panel" data-panel="weather" hidden>
-      <form id="weather-zip-form" class="row" hidden>
-        <span>Enter your zip code to get weather from weather.gov.</span>
-        <input id="weather-zip" type="text" inputmode="numeric" maxlength="5" placeholder="Zip code" aria-label="Zip code" />
-        <button type="submit">Save</button>
-      </form>
-      <div id="weather-body" hidden>
-        <div class="row">
-          <strong id="weather-now"></strong>
-          <span id="weather-place" class="dim"></span>
-        </div>
-        <div id="weather-alerts" class="alert" hidden></div>
-        <div class="row">
-          <span id="weather-updated" class="dim"></span>
-          <button id="weather-refresh" type="button">Refresh</button>
-        </div>
-        <div class="scroll">
-          <h3>Next 48 hours</h3>
-          <div id="weather-hourly" class="list"></div>
-          <h3>This week</h3>
-          <div id="weather-daily" class="list"></div>
-        </div>
-      </div>
-      <div id="weather-status" class="dim"></div>
-    </section>
-
-    <section class="panel" data-panel="center" hidden>
-      <div data-view="grid" class="tiles">
-        <button type="button" data-tile="weather">Weather</button>
-        <button type="button" data-tile="volume">Volume</button>
-        <button type="button" data-tile="nightlight">Night light</button>
-        <button type="button" data-tile="saver" id="tile-saver">Battery saver</button>
-        <button type="button" data-tile="settings">Settings</button>
-        <button type="button" data-tile="power">Power</button>
-        <button type="button" data-tile="notifications" id="tile-notifications">Notifications</button>
-      </div>
-
-      <div data-view="volume" hidden>
-        <div class="row"><button type="button" class="back">Back</button><strong>Volume</strong></div>
-        <div class="row">
-          <input id="center-volume" type="range" min="0" max="100" step="1" value="0" aria-label="System volume" />
-          <span id="center-volume-value">--%</span>
-        </div>
-      </div>
-
-      <div data-view="nightlight" hidden>
-        <div class="row">
-          <button type="button" class="back">Back</button><strong>Night light</strong>
-          <button id="nightlight-toggle" type="button" disabled>Off</button>
-        </div>
-        <div class="row">
-          <span>Intensity</span>
-          <input id="nightlight-strength" type="range" min="0" max="100" step="1" value="50" aria-label="Night light intensity" disabled />
-          <span id="nightlight-value">--%</span>
-        </div>
-        <div id="nightlight-status" class="dim"></div>
-      </div>
-
-      <div data-view="power" hidden>
-        <div class="row"><button type="button" class="back">Back</button><strong>Power</strong></div>
-        <div class="row buttons">
-          <button type="button" data-power="lock">Lock</button>
-          <button type="button" data-power="shutdown">Shut down</button>
-          <button type="button" data-power="restart">Restart</button>
-        </div>
-      </div>
-
-      <div data-view="notifications" hidden>
-        <div class="row">
-          <button type="button" class="back">Back</button><strong>Notifications</strong>
-          <button id="notifications-clear" type="button">Clear</button>
-        </div>
-        <div id="notifications-list" class="list scroll"></div>
-        <div id="notifications-empty" class="dim">No notifications since The Pill started.</div>
-      </div>
-    </section>
-
-    <section class="panel" data-panel="settings" hidden>
-      <strong>Pill settings</strong>
-      <div id="settings-options" class="list"></div>
-      <form id="settings-zip-form" class="row">
-        <span>Weather zip code</span>
-        <input id="settings-zip" type="text" inputmode="numeric" maxlength="5" placeholder="Zip code" aria-label="Zip code" />
-        <button type="submit">Save</button>
-      </form>
-      <div id="settings-status" class="dim"></div>
-    </section>
   </div>
   <script src="main.js"></script>
 </body>

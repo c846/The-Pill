@@ -1,16 +1,18 @@
-//! Global shortcuts and power events.
+//! Global shortcuts, power events, and windows moving in front of the pill.
 //!
-//! A hidden window on its own thread receives both. The thread sleeps inside GetMessage until Windows has
+//! A hidden window on its own thread receives all three. The thread sleeps inside GetMessage until Windows has
 //! something for it, so it costs nothing while the pill is idle.
 
-use crate::{audio, battery, pill, switcher, util::emit, weather, worker};
+use crate::{audio, backdrop, battery, pill, switcher, util::emit, weather, worker};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_NOREPEAT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW, MSG, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_HOTKEY, WM_POWERBROADCAST, WNDCLASSW,
+    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MOVESIZEEND, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_HOTKEY, WM_POWERBROADCAST, WNDCLASSW,
 };
 
 const ALT_W: i32 = 1;
@@ -83,6 +85,18 @@ unsafe fn run() {
     }
     battery::watch(hwnd);
 
+    // The screen behind the pill changes when another window comes to the front, finishes moving, or
+    // minimizes or restores, so the pill rechecks its look then. Windows calls back on this thread's loop.
+    let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+    for (first, last) in [
+        (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+        (EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MINIMIZEEND),
+    ] {
+        if SetWinEventHook(first, last, None, Some(on_window_event), 0, 0, flags).is_invalid() {
+            eprintln!("Could not watch for window changes.");
+        }
+    }
+
     let mut message = MSG::default();
     while GetMessageW(&mut message, None, 0, 0).as_bool() {
         DispatchMessageW(&message);
@@ -120,4 +134,8 @@ fn on_hotkey(id: i32) {
         VOLUME_UP => audio::key(audio::Key::Up),
         _ => {}
     }
+}
+
+unsafe extern "system" fn on_window_event(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
+    backdrop::nudge();
 }

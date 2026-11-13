@@ -1,12 +1,31 @@
-/* Deliberately plain: one dark look, no icons, no transitions or animations. */
+/*
+ * Looks: a light pill over dark backdrops and a dark one over light backdrops (Rust picks, see
+ * backdrop.rs), plain glass with no border, Windows fonts, and the original Pill's icons.
+ *
+ * Motion: springs with a little rebound for things appearing and growing, quick and calm for things
+ * leaving. The spring curves are worked out once in main.js and set as --spring, --spring-pop and
+ * --spring-out. Animations stick to transform and opacity where they can, nothing repeats forever, and
+ * nothing waits for an animation before it can be clicked.
+ */
 
 :root {
-  --background: #1c1c1e;
-  --raised: #2c2c2e;
-  --hover: #3a3a3c;
-  --text: #f2f2f2;
-  --dim: #a0a0a5;
-  --alert: #ff9f0a;
+  /* The pill's colors as RGB triplets, so each use can pick its own opacity. */
+  --bg: 255, 255, 255;
+  --fg: 20, 20, 22;
+  --text: rgb(var(--fg));
+  --dim: rgba(var(--fg), 0.58);
+  --tint: rgba(var(--fg), 0.07);
+  --tint-strong: rgba(var(--fg), 0.13);
+  --line: rgba(var(--fg), 0.16);
+  --alert: #c25400;
+  --theme-fade: 0.35s ease;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: 0, 0, 0;
+  --fg: 245, 245, 247;
+  --alert: #ffa94d;
   color-scheme: dark;
 }
 
@@ -17,89 +36,444 @@
 html,
 body {
   margin: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   background: transparent;
-  font: 13px/1.35 "Segoe UI", system-ui, sans-serif;
+  font: 13px/1.35 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   color: var(--text);
   user-select: none;
+  -webkit-font-smoothing: antialiased;
 }
 
 [hidden] {
   display: none !important;
 }
 
-/* The window is resized to this element, so it alone decides the pill's size. */
+/* ---- The pill ---- */
+
+/* The glass. main.js sets its width, height and corner radius from #content; the window follows it. */
 #pill {
   position: absolute;
   top: 0;
-  left: 0;
-  width: 480px;
-  padding: 6px 10px 8px;
-  background: var(--background);
-  border-radius: 0 0 16px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  left: 50%;
+  width: 132px;
+  height: 8px;
+  border-radius: 4px;
+  transform: translateX(-50%);
+  overflow: hidden;
+  color: var(--text);
+  background-color: rgba(var(--bg), 0.8);
+  transition:
+    width 0.5s var(--spring),
+    height 0.5s var(--spring),
+    border-radius 0.5s var(--spring),
+    background-color var(--theme-fade),
+    color var(--theme-fade);
 }
 
-#pill.collapsed {
-  height: 8px;
-  padding: 0;
-  border-radius: 0 0 6px 6px;
+/* Shrinking is quicker and settles without bouncing, so it never gets in the way. */
+#pill[data-motion="shrink"] {
+  transition:
+    width 0.34s var(--spring-out),
+    height 0.34s var(--spring-out),
+    border-radius 0.34s var(--spring-out),
+    background-color var(--theme-fade),
+    color var(--theme-fade);
+}
+
+#pill.collapsed,
+#pill.closing {
+  background-color: rgba(var(--bg), 0.3);
+}
+
+#pill.collapsed:hover {
+  background-color: rgba(var(--bg), 0.8);
 }
 
 /* Alt+W hides the idle pill but leaves it in place, so hovering still opens it. */
 #pill.collapsed.idle-hidden {
-  background: transparent;
+  background-color: transparent;
 }
 
-#pill.collapsed > * {
+#pill.collapsed #content > * {
   display: none !important;
 }
 
+/* Laid out at full size from the start and centered, so the glass reveals it from the middle. */
+#content {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 480px;
+  margin-left: -240px;
+  padding: 4px 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transform-origin: 50% 0;
+  transition: opacity 0.2s ease, transform 0.3s var(--spring-out);
+}
+
+#pill.closing #content {
+  opacity: 0;
+  transform: scale(0.96);
+  transition-duration: 0.14s, 0.3s;
+}
+
+/* ---- Appearing ---- */
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Plays each time one of these is shown. */
+#bar,
+#toast,
+#switcher,
+#volume-flash,
+.panel,
+[data-view] {
+  animation: enter 0.42s var(--spring) both;
+}
+
+#bar .group > *,
+#status > * {
+  animation: pop 0.45s var(--spring-pop) both;
+}
+
+#bar .group > :nth-child(2) { animation-delay: 25ms; }
+#bar .group > :nth-child(3) { animation-delay: 50ms; }
+#status > :nth-child(1) { animation-delay: 20ms; }
+#status > :nth-child(2) { animation-delay: 40ms; }
+#status > :nth-child(3) { animation-delay: 60ms; }
+#status > :nth-child(4) { animation-delay: 80ms; }
+
+.tiles > * {
+  animation: pop 0.45s var(--spring-pop) both;
+}
+
+.tiles > :nth-child(2) { animation-delay: 20ms; }
+.tiles > :nth-child(3) { animation-delay: 40ms; }
+.tiles > :nth-child(4) { animation-delay: 60ms; }
+.tiles > :nth-child(5) { animation-delay: 80ms; }
+.tiles > :nth-child(6) { animation-delay: 100ms; }
+.tiles > :nth-child(7) { animation-delay: 120ms; }
+
+/* ---- Icons and glyphs ---- */
+
+/* The icon files are dark; the dark pill shows them inverted, which is exactly the original's light set. */
+.icon {
+  display: block;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  transition: filter var(--theme-fade), transform 0.4s var(--spring-pop);
+}
+
+:root[data-theme="dark"] .icon {
+  filter: invert(1);
+}
+
+.icon.small {
+  width: 15px;
+  height: 15px;
+}
+
+.icon.huge {
+  width: 34px;
+  height: 34px;
+}
+
+.glyph {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glyph.small {
+  width: 12px;
+  height: 12px;
+}
+
+.glyph.filled {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* ---- Controls ---- */
+
 button {
+  position: relative;
   font: inherit;
   color: inherit;
-  background: var(--raised);
+  background: transparent;
   border: 0;
-  border-radius: 6px;
-  padding: 4px 8px;
+  border-radius: 10px;
+  padding: 5px 10px;
   cursor: default;
+  transition:
+    background-color 0.15s ease,
+    opacity 0.2s ease,
+    transform 0.4s var(--spring-pop);
 }
 
 button:hover:not(:disabled) {
-  background: var(--hover);
+  background-color: var(--tint);
+}
+
+/* Presses sink at once and spring back on release. */
+button:active:not(:disabled) {
+  transform: scale(0.93);
+  transition: background-color 0.15s ease, transform 0.08s ease-out;
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
+}
+
+/* Tabbing to a control lights it up like the mouse would, with no outline. */
+:focus {
+  outline: none;
+}
+
+button:focus-visible:not(:disabled) {
+  background-color: var(--tint);
+}
+
+button:focus-visible:not(:disabled) > .icon {
+  transform: scale(1.1);
+}
+
+button.solid:focus-visible:not(:disabled):not([aria-pressed="true"]),
+.tile:focus-visible:not(:disabled):not([aria-pressed="true"]),
+#apps-favorites > button:focus-visible {
+  background-color: var(--tint-strong);
+}
+
+button.solid {
+  background-color: var(--tint);
+}
+
+button.solid:hover:not(:disabled) {
+  background-color: var(--tint-strong);
 }
 
 button[aria-pressed="true"] {
-  outline: 1px solid var(--text);
+  background-color: var(--tint-strong);
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 26px;
+  padding: 0;
+}
+
+.icon-button.big {
+  width: 42px;
+  height: 38px;
+}
+
+.icon-button.big .icon {
+  width: 22px;
+  height: 22px;
+}
+
+button:hover:not(:disabled) > .icon {
+  transform: scale(1.1);
+}
+
+/* The open panel's button gets a short line drawn under it instead of a heavy background. */
+#bar .icon-button::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  right: 11px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transition: transform 0.4s var(--spring-pop);
+}
+
+#bar .icon-button[aria-pressed="true"] {
+  background-color: transparent;
+}
+
+#bar .icon-button[aria-pressed="true"]::after {
+  transform: scaleX(1);
 }
 
 input[type="text"],
 input[type="search"] {
   font: inherit;
   color: inherit;
-  background: var(--raised);
+  min-width: 0;
+  background: var(--tint);
   border: 0;
-  border-radius: 6px;
-  padding: 4px 8px;
+  border-radius: 10px;
+  padding: 5px 10px;
+  outline: none;
+  transition: background-color 0.15s ease, box-shadow 0.25s ease;
 }
 
-input[type="range"] {
+input[type="text"]:hover,
+input[type="search"]:hover {
+  background: var(--tint-strong);
+}
+
+input[type="text"]:focus,
+input[type="search"]:focus {
+  background: var(--tint-strong);
+}
+
+input::placeholder {
+  color: var(--dim);
+}
+
+input[type="search"]::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* Sliders: a thin track filled up to the value (main.js keeps --fill current) and a thumb that swells. */
+.slider {
+  --fill: 0%;
   flex: 1;
   min-width: 0;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
 }
 
-h3 {
-  margin: 6px 0 2px;
-  font-size: 12px;
-  color: var(--dim);
-  font-weight: 600;
+.slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--text) var(--fill), var(--line) var(--fill));
 }
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--text);
+  transform: scale(0.75);
+  transition: transform 0.4s var(--spring-pop), background-color var(--theme-fade);
+}
+
+.slider:hover:not(:disabled)::-webkit-slider-thumb,
+.slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1);
+}
+
+.slider:active:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+
+.slider:disabled {
+  opacity: 0.4;
+}
+
+/* On/off switch. */
+.switch {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border-radius: 10px;
+  background-color: var(--line);
+}
+
+.switch:hover:not(:disabled) {
+  background-color: rgba(var(--fg), 0.24);
+}
+
+.switch[aria-checked="true"],
+.switch[aria-checked="true"]:hover:not(:disabled) {
+  background-color: var(--text);
+}
+
+.switch .knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgb(var(--bg));
+  box-shadow: 0 0 0 0.5px rgba(var(--fg), 0.2);
+  transition: transform 0.45s var(--spring-pop), background-color var(--theme-fade);
+}
+
+.switch[aria-checked="true"] .knob {
+  transform: translateX(16px);
+}
+
+/* A bar that fills to a level, used for the volume flash. */
+.meter {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  background: var(--text);
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  transition: transform 0.3s var(--spring);
+}
+
+/* Scrolling areas run out to the pill's edges (#content's 8px plus the panel's 2px) with no scrollbar. */
+.scroll,
+.hourly {
+  scrollbar-width: none;
+  margin-left: -10px;
+  margin-right: -10px;
+  padding-left: 10px;
+  padding-right: 10px;
+  scroll-padding: 0 10px;
+}
+
+.panel > .scroll:last-child {
+  margin-bottom: -6px;
+  padding-bottom: 6px;
+}
+
+/* ---- Layout helpers ---- */
 
 .row {
   display: flex;
@@ -107,43 +481,97 @@ h3 {
   gap: 8px;
 }
 
+.row.center {
+  justify-content: center;
+  gap: 14px;
+}
+
 .row > input[type="text"],
 .row > input[type="search"] {
   flex: 1;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dim {
   color: var(--dim);
 }
 
+.small {
+  font-size: 11.5px;
+}
+
+.dim:empty {
+  display: none;
+}
+
 .alert {
   color: var(--alert);
 }
 
+.value {
+  min-width: 36px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.value.left {
+  text-align: left;
+}
+
+.big {
+  font: 600 26px/1 "Segoe UI Variable Display", "Segoe UI", sans-serif;
+}
+
+/* ---- Lists ---- */
+
 .list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .list > button,
 .list > .item {
+  flex: none;
   text-align: left;
-  background: transparent;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  border-radius: 8px;
+}
+
+.list > button:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .list > .item {
-  padding: 2px 8px;
+  padding: 4px 10px;
 }
 
 .scroll {
   max-height: 260px;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
+
+/* ---- Bar ---- */
 
 #bar {
   display: flex;
@@ -152,81 +580,66 @@ h3 {
   gap: 8px;
 }
 
-.group,
+.group {
+  display: flex;
+  gap: 2px;
+}
+
 #status {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 12px;
+  height: 26px;
+  padding: 0 12px;
+  font-variant-numeric: tabular-nums;
 }
 
-#status {
-  gap: 10px;
-  background: transparent;
+#status > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
 }
 
-#status span:empty {
+#status .empty,
+#status > span:empty {
   display: none;
 }
 
 /* With every item hidden, the Pill Center still needs something to click. */
-#status:not(:has(span:not(:empty):not([hidden])))::after {
-  content: "Center";
+#status:not(:has(> span:not(.empty):not(:empty):not([hidden])))::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
 }
 
-#switcher {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 4px 2px;
-  white-space: nowrap;
-  overflow: hidden;
+#bar-battery {
+  gap: 1px !important;
 }
 
-#switcher-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
+#bar-battery.low {
+  color: var(--alert);
 }
 
-#volume-flash {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+/* ---- Toast ---- */
 
-#volume-flash progress {
-  flex: 1;
-}
-
-.panel {
+#toast {
+  position: relative;
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  padding: 0 4px 6px;
+}
+
+#toast .row {
   gap: 6px;
 }
 
-.panel > [data-view] {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.tiles {
-  display: grid !important;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-}
-
-.tiles button {
-  padding: 10px 4px;
-}
-
-#apps-favorites {
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-#apps-favorites > button {
-  background: var(--raised);
+#toast-close {
+  width: 26px;
+  height: 24px;
 }
 
 #toast-title {
@@ -238,11 +651,514 @@ h3 {
   overflow: hidden;
 }
 
-.notification + .notification {
-  border-top: 1px solid var(--raised);
+#toast-settings {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
+/* A line that runs down while the notification shows. */
+.timer {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--line);
+  transform-origin: 0 50%;
+}
+
+/* ---- Switcher and volume flash ---- */
+
+#switcher {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 6px;
+  white-space: nowrap;
+}
+
+#switcher-app {
+  max-width: 45%;
+}
+
+#volume-flash {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 6px;
+}
+
+.icon-slot {
+  position: relative;
+  display: block;
+}
+
+/* Muted: a line is drawn through the speaker. */
+.icon-slot::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 50%;
+  width: 22px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: currentColor;
+  box-shadow: 0 0 0 1.5px rgba(var(--bg), 0.8);
+  transform: rotate(-45deg) scaleX(0);
+  transition: transform 0.35s var(--spring);
+}
+
+.icon-slot.muted::after {
+  transform: rotate(-45deg) scaleX(1);
+}
+
+/* ---- Panels ---- */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 2px 0;
+}
+
+.panel > [data-view] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.panel > [data-view].row {
+  flex-direction: row;
+}
+
+/* Music */
+
+.art {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--tint);
+}
+
+.art .icon {
+  width: 22px;
+  height: 22px;
+}
+
+#music-toggle-icon.swap {
+  animation: pop 0.4s var(--spring-pop);
+}
+
+/* Apps */
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 10px;
+  border-radius: 10px;
+  background: var(--tint);
+  transition: background-color 0.15s ease, box-shadow 0.25s ease;
+}
+
+.search:hover,
+.search:focus-within {
+  background: var(--tint-strong);
+}
+
+.search .glyph {
+  color: var(--dim);
+}
+
+.search input,
+.search input:hover,
+.search input:focus {
+  flex: 1;
+  background: transparent;
+  box-shadow: none;
+  padding-left: 0;
+}
+
+#apps-favorites {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.empty-note {
+  padding: 10px 0 6px;
+  text-align: center;
+}
+
+#apps-favorites > button {
+  background-color: var(--tint);
+  max-width: 150px;
+}
+
+#apps-favorites > button:hover {
+  background-color: var(--tint-strong);
+}
+
+/* Weather */
+
+.weather-now {
+  gap: 10px;
+  padding: 0 2px;
+}
+
+.hourly {
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+}
+
+.hour {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 50px;
+  padding: 6px 0;
+  border-radius: 10px;
+  transition: background-color 0.15s ease;
+}
+
+.hour:hover {
+  background: var(--tint);
+}
+
+.hour-label {
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.hour-temp {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rain {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  font-size: 10.5px;
+  color: var(--dim);
+  min-height: 13px;
+}
+
+.rain .glyph {
+  width: 10px;
+  height: 10px;
+}
+
+/* Where a new day starts in the hourly strip. */
+.hour-day {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  margin: 6px 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 600;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  color: var(--dim);
+}
+
+.week {
+  position: relative;
+}
+
+#weather-graph {
+  display: block;
+  width: 100%;
+  height: 156px;
+  overflow: visible;
+}
+
+.axis {
+  fill: var(--dim);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.day-label {
+  fill: var(--dim);
+  font-size: 11px;
+  text-anchor: middle;
+  transition: fill 0.15s ease;
+}
+
+.grid-line {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  animation: fade 0.5s ease both;
+}
+
+@keyframes draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+/* The line draws itself across the week, then the dots pop onto it. */
+.graph-line {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: draw 0.75s cubic-bezier(0.3, 0.7, 0.2, 1) both;
+}
+
+.graph-area {
+  fill: var(--tint);
+  animation: fade 0.6s 0.25s ease both;
+}
+
+.graph-dot {
+  fill: var(--text);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pop 0.45s var(--spring-pop) both;
+  transition: transform 0.35s var(--spring-pop), fill var(--theme-fade);
+}
+
+.graph-dot.active {
+  transform: scale(1.6);
+}
+
+.graph-guide {
+  stroke: var(--line);
+  stroke-width: 1;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transform: scaleY(0);
+  transition: transform 0.35s var(--spring), opacity 0.2s ease;
+  opacity: 0;
+}
+
+.graph-guide.active {
+  transform: scaleY(1);
+  opacity: 1;
+}
+
+.graph-day.active .day-label {
+  fill: var(--text);
+}
+
+.graph-hit {
+  fill: transparent;
+}
+
+.graph-icon {
+  transition: filter var(--theme-fade);
+}
+
+:root[data-theme="dark"] .graph-icon {
+  filter: invert(1);
+}
+
+/* The day's details, which glide from dot to dot. */
+.tip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 184px;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: rgb(var(--bg));
+  box-shadow: 0 0 0 1px var(--line), 0 4px 14px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  transition:
+    transform 0.4s var(--spring),
+    opacity 0.15s ease;
+}
+
+.tip.showing {
+  animation: tip-in 0.35s var(--spring-pop);
+}
+
+.tip.leaving {
+  opacity: 0;
+}
+
+@keyframes tip-in {
+  from {
+    opacity: 0;
+    scale: 0.85;
+  }
+}
+
+.tip-icon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-top: 2px;
+}
+
+.tip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.tip strong {
+  font-size: 12.5px;
+}
+
+.tip .alert {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Pill Center */
+
+.panel > .tiles {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  height: 42px;
+  padding: 0;
+  border-radius: 12px;
+  background-color: var(--tint);
+}
+
+.tile:hover:not(:disabled) {
+  background-color: var(--tint-strong);
+}
+
+.tile .icon {
+  width: 17px;
+  height: 17px;
+}
+
+/* An "on" tile turns solid, with its icon flipped to match. */
+.tile[aria-pressed="true"],
+.tile[aria-pressed="true"]:hover:not(:disabled) {
+  background-color: var(--text);
+}
+
+.tile[aria-pressed="true"] .icon {
+  filter: invert(1);
+}
+
+:root[data-theme="dark"] .tile[aria-pressed="true"] .icon {
+  filter: none;
+}
+
+.tile-value {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.tile-value:empty {
+  display: none;
+}
+
+.badge {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text);
+  animation: pop 0.45s var(--spring-pop) both;
+}
+
+/* On a solid "on" tile the dot flips so it stays visible. */
+.tile[aria-pressed="true"] .badge {
+  background: rgb(var(--bg));
+}
+
+.power-buttons {
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+[data-power].confirm {
+  color: rgb(var(--bg));
+  background-color: var(--alert) !important;
+  animation: pop 0.35s var(--spring-pop);
 }
 
 .notification {
   white-space: normal !important;
-  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px !important;
+}
+
+.notification + .notification {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  box-shadow: 0 -1px 0 var(--line);
+}
+
+/* Pill settings */
+
+.options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 8px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+  text-align: left;
+}
+
+.option[aria-pressed="true"] {
+  background-color: transparent;
+}
+
+.option[aria-pressed="true"]:hover {
+  background-color: var(--tint);
+}
+
+/* ---- Less motion ---- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0s !important;
+    transition-duration: 1ms !important;
+  }
 }

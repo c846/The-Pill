@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>The Pill</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="pill" class="collapsed">
+    <!-- A Windows notification takes over the pill while it shows. -->
+    <section id="toast" hidden>
+      <div class="row">
+        <strong id="toast-app"></strong>
+        <button id="toast-close" type="button" aria-label="Dismiss notification">✕</button>
+      </div>
+      <div id="toast-title"></div>
+      <div id="toast-message" class="dim"></div>
+      <button id="toast-settings" type="button" hidden>Open notification settings</button>
+    </section>
+
+    <div id="bar" hidden>
+      <div class="group">
+        <button type="button" data-open="music" data-option="music">Music</button>
+        <button type="button" data-open="apps" data-option="apps">Apps</button>
+        <button type="button" data-open="running" data-option="running">Open apps</button>
+      </div>
+      <button id="status" type="button" data-open="center" title="Pill Center">
+        <span id="bar-weather" data-option="weather"></span>
+        <span id="bar-date" data-option="date"></span>
+        <span id="bar-time" data-option="time"></span>
+        <span id="bar-battery" data-option="battery"></span>
+      </button>
+    </div>
+
+    <div id="switcher" hidden>
+      <strong id="switcher-app"></strong>
+      <span id="switcher-title" class="dim"></span>
+      <span id="switcher-count" class="dim"></span>
+    </div>
+
+    <div id="volume-flash" hidden>
+      <span>Volume</span>
+      <progress id="volume-flash-bar" max="100" value="0"></progress>
+      <span id="volume-flash-value"></span>
+    </div>
+
+    <section class="panel" data-panel="music" hidden>
+      <strong id="music-title">Nothing playing</strong>
+      <div id="music-artist" class="dim"></div>
+      <div class="row">
+        <input id="music-seek" type="range" min="0" max="1" step="any" value="0" aria-label="Track position" disabled />
+        <span id="music-time" class="dim">--:-- / --:--</span>
+      </div>
+      <div class="row buttons">
+        <button id="music-previous" type="button" disabled>Previous</button>
+        <button id="music-toggle" type="button" disabled>Play</button>
+        <button id="music-next" type="button" disabled>Next</button>
+      </div>
+      <div id="music-status" class="dim"></div>
+    </section>
+
+    <section class="panel" data-panel="apps" hidden>
+      <input id="apps-search" type="search" placeholder="Search apps" aria-label="Search apps" autocomplete="off" />
+      <div id="apps-favorites" class="list" hidden></div>
+      <div id="apps-hint" class="dim">Right-click an app to add it to favorites.</div>
+      <div id="apps-list" class="list scroll"></div>
+    </section>
+
+    <section class="panel" data-panel="running" hidden>
+      <div id="running-list" class="list scroll"></div>
+      <div id="running-empty" class="dim" hidden>No open apps</div>
+    </section>
+
+    <section class="panel" data-panel="weather" hidden>
+      <form id="weather-zip-form" class="row" hidden>
+        <span>Enter your zip code to get weather from weather.gov.</span>
+        <input id="weather-zip" type="text" inputmode="numeric" maxlength="5" placeholder="Zip code" aria-label="Zip code" />
+        <button type="submit">Save</button>
+      </form>
+      <div id="weather-body" hidden>
+        <div class="row">
+          <strong id="weather-now"></strong>
+          <span id="weather-place" class="dim"></span>
+        </div>
+        <div id="weather-alerts" class="alert" hidden></div>
+        <div class="row">
+          <span id="weather-updated" class="dim"></span>
+          <button id="weather-refresh" type="button">Refresh</button>
+        </div>
+        <div class="scroll">
+          <h3>Next 48 hours</h3>
+          <div id="weather-hourly" class="list"></div>
+          <h3>This week</h3>
+          <div id="weather-daily" class="list"></div>
+        </div>
+      </div>
+      <div id="weather-status" class="dim"></div>
+    </section>
+
+    <section class="panel" data-panel="center" hidden>
+      <div data-view="grid" class="tiles">
+        <button type="button" data-tile="weather">Weather</button>
+        <button type="button" data-tile="volume">Volume</button>
+        <button type="button" data-tile="nightlight">Night light</button>
+        <button type="button" data-tile="saver" id="tile-saver">Battery saver</button>
+        <button type="button" data-tile="settings">Settings</button>
+        <button type="button" data-tile="power">Power</button>
+        <button type="button" data-tile="notifications" id="tile-notifications">Notifications</button>
+      </div>
+
+      <div data-view="volume" hidden>
+        <div class="row"><button type="button" class="back">Back</button><strong>Volume</strong></div>
+        <div class="row">
+          <input id="center-volume" type="range" min="0" max="100" step="1" value="0" aria-label="System volume" />
+          <span id="center-volume-value">--%</span>
+        </div>
+      </div>
+
+      <div data-view="nightlight" hidden>
+        <div class="row">
+          <button type="button" class="back">Back</button><strong>Night light</strong>
+          <button id="nightlight-toggle" type="button" disabled>Off</button>
+        </div>
+        <div class="row">
+          <span>Intensity</span>
+          <input id="nightlight-strength" type="range" min="0" max="100" step="1" value="50" aria-label="Night light intensity" disabled />
+          <span id="nightlight-value">--%</span>
+        </div>
+        <div id="nightlight-status" class="dim"></div>
+      </div>
+
+      <div data-view="power" hidden>
+        <div class="row"><button type="button" class="back">Back</button><strong>Power</strong></div>
+        <div class="row buttons">
+          <button type="button" data-power="lock">Lock</button>
+          <button type="button" data-power="shutdown">Shut down</button>
+          <button type="button" data-power="restart">Restart</button>
+        </div>
+      </div>
+
+      <div data-view="notifications" hidden>
+        <div class="row">
+          <button type="button" class="back">Back</button><strong>Notifications</strong>
+          <button id="notifications-clear" type="button">Clear</button>
+        </div>
+        <div id="notifications-list" class="list scroll"></div>
+        <div id="notifications-empty" class="dim">No notifications since The Pill started.</div>
+      </div>
+    </section>
+
+    <section class="panel" data-panel="settings" hidden>
+      <strong>Pill settings</strong>
+      <div id="settings-options" class="list"></div>
+      <form id="settings-zip-form" class="row">
+        <span>Weather zip code</span>
+        <input id="settings-zip" type="text" inputmode="numeric" maxlength="5" placeholder="Zip code" aria-label="Zip code" />
+        <button type="submit">Save</button>
+      </form>
+      <div id="settings-status" class="dim"></div>
+    </section>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

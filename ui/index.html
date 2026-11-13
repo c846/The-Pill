@@ -66,10 +66,10 @@
         <span id="switcher-count" class="dim small"></span>
       </div>
 
-      <div id="volume-flash" hidden>
-        <span id="volume-flash-icon" class="icon-slot"><img class="icon" src="icons/volume.png" alt="" draggable="false" /></span>
-        <div class="meter"><div id="volume-flash-bar" class="meter-fill"></div></div>
-        <span id="volume-flash-value" class="value"></span>
+      <div id="level-flash" hidden>
+        <span id="level-flash-icon" class="icon-slot"><img id="level-flash-image" class="icon" src="icons/volume.png" alt="" draggable="false" /></span>
+        <div class="meter"><div id="level-flash-bar" class="meter-fill"></div></div>
+        <span id="level-flash-value" class="value"></span>
       </div>
 
       <section class="panel" data-panel="music" hidden>
@@ -153,6 +153,9 @@
           <button class="tile" type="button" data-tile="volume" aria-label="Volume" title="Volume">
             <img class="icon" src="icons/volume.png" alt="" draggable="false" />
           </button>
+          <button class="tile" type="button" data-tile="brightness" id="tile-brightness" aria-label="Brightness" title="Brightness">
+            <img class="icon" src="icons/clear-day.png" alt="" draggable="false" />
+          </button>
           <button class="tile" type="button" data-tile="nightlight" aria-label="Night light" title="Night light">
             <img class="icon" src="icons/nightlight.png" alt="" draggable="false" />
           </button>
@@ -176,6 +179,13 @@
           <img class="icon" src="icons/volume.png" alt="" draggable="false" />
           <input id="center-volume" class="slider" type="range" min="0" max="100" step="1" value="0" aria-label="System volume" />
           <span id="center-volume-value" class="value">--%</span>
+        </div>
+
+        <div data-view="brightness" class="row" hidden>
+          <button class="icon-button back" type="button" aria-label="Back" title="Back"><svg class="glyph"><use href="#g-back" /></svg></button>
+          <img class="icon" src="icons/clear-day.png" alt="" draggable="false" />
+          <input id="center-brightness" class="slider" type="range" min="0" max="100" step="1" value="0" aria-label="Screen brightness" />
+          <span id="center-brightness-value" class="value">--</span>
         </div>
 
         <div data-view="nightlight" hidden>

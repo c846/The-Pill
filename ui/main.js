@@ -10,7 +10,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 const COLLAPSE_DELAY = 250;
 const TOAST_DURATION = 5500;
-const VOLUME_FLASH_DURATION = 1500;
+const FLASH_DURATION = 1500;
 // After a seek, apps take a moment to report their new position, so the slider waits before following.
 const SEEK_SETTLE_DELAY = 2500;
 const POWER_CONFIRM_DURATION = 4000;
@@ -112,10 +112,10 @@ function glyph(name, className = 'glyph') {
 const ui = {
   hover: false,
   panel: null, // music, apps, running, weather, center or settings
-  view: 'grid', // the Pill Center page: grid, volume, nightlight, power or notifications
+  view: 'grid', // the Pill Center page: grid, volume, brightness, nightlight, power or notifications
   keyboard: false, // opened from a shortcut, so it stays open without the mouse
   switcher: null,
-  volumeFlash: null,
+  flash: null, // the volume or brightness bar shown after a change
   toast: null,
   idleHidden: false,
 };
@@ -163,7 +163,7 @@ favorites = favorites.filter((id) => typeof id === 'string');
 
 function isPinned() {
   const typing = document.hasFocus() && document.activeElement?.matches('input[type="text"], input[type="search"]');
-  return Boolean(ui.keyboard || ui.switcher || ui.toast || ui.volumeFlash || typing);
+  return Boolean(ui.keyboard || ui.switcher || ui.toast || ui.flash || typing);
 }
 
 let closeTimer;
@@ -196,7 +196,7 @@ function render() {
   $('#toast').hidden = !ui.toast;
   $('#bar').hidden = !showMain || Boolean(ui.switcher);
   $('#switcher').hidden = !showMain || !ui.switcher;
-  $('#volume-flash').hidden = !showMain || !ui.volumeFlash || Boolean(ui.switcher);
+  $('#level-flash').hidden = !showMain || !ui.flash || Boolean(ui.switcher);
   for (const panel of $$('.panel')) {
     panel.hidden = !showMain || Boolean(ui.switcher) || panel.dataset.panel !== ui.panel;
   }
@@ -401,6 +401,27 @@ $('#bar').addEventListener('contextmenu', () => openPanel(ui.panel === 'settings
 
 // ---- Clock and battery ----
 
+// Text is rarely a whole number of screen pixels wide, which leaves the status button, sitting against the
+// right edge, starting part-way through a pixel. Its text then shifts by a pixel when its press animation
+// ends. Rounding the button's width up to whole screen pixels keeps the text still.
+function snapStatusWidth() {
+  const status = $('#status');
+  status.style.width = '';
+  const style = getComputedStyle(status);
+  const padding = style.boxSizing === 'border-box' ? 0 : parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const width = parseFloat(style.width) + padding;
+  // There is no width to read while the bar is hidden.
+  if (width > 0) {
+    status.style.width = `${Math.ceil(width * devicePixelRatio - 0.01) / devicePixelRatio - padding}px`;
+  }
+}
+
+// Runs when an item's text changes size or the bar appears, not on a timer.
+const statusItems = new ResizeObserver(snapStatusWidth);
+for (const item of $$('#status > span')) {
+  statusItems.observe(item);
+}
+
 function updateClock() {
   const now = new Date();
   $('#bar-time').textContent = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -541,25 +562,63 @@ $('#notifications-clear').addEventListener('click', async () => {
   showNotificationHistory();
 });
 
-// ---- Volume ----
+// ---- Volume and brightness ----
 
-let volumeFlashTimer;
+const FLASH_ICONS = { volume: 'icons/volume.png', brightness: 'icons/clear-day.png' };
+
+// Shows the bar that pops up after the volume or brightness changes.
+let flashTimer;
+function flashLevel(kind, level, muted = false) {
+  ui.flash = { kind, level, muted };
+  const image = $('#level-flash-image');
+  if (image.getAttribute('src') !== FLASH_ICONS[kind]) {
+    image.src = FLASH_ICONS[kind];
+  }
+  $('#level-flash-bar').style.transform = `scaleX(${muted ? 0 : level / 100})`;
+  $('#level-flash-value').textContent = muted ? 'Muted' : String(level);
+  $('#level-flash-icon').classList.toggle('muted', Boolean(muted));
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => {
+    ui.flash = null;
+    render();
+    scheduleCollapse();
+  }, FLASH_DURATION);
+  render();
+}
+
 function showVolume({ volume, muted }) {
-  ui.volumeFlash = { volume, muted };
-  $('#volume-flash-bar').style.transform = `scaleX(${muted ? 0 : volume / 100})`;
-  $('#volume-flash-value').textContent = muted ? 'Muted' : String(volume);
-  $('#volume-flash-icon').classList.toggle('muted', Boolean(muted));
   if (ui.panel === 'center' && ui.view === 'volume') {
     showCenterVolume(volume);
   }
-  clearTimeout(volumeFlashTimer);
-  volumeFlashTimer = setTimeout(() => {
-    ui.volumeFlash = null;
-    render();
-    scheduleCollapse();
-  }, VOLUME_FLASH_DURATION);
-  render();
+  flashLevel('volume', volume, muted);
 }
+
+// Windows reports every brightness change, including the ones the pill's own slider makes. While that
+// slider is on screen it already shows the level, so the bar only pops up for changes made elsewhere,
+// such as the laptop's brightness keys.
+let brightnessDraggedAt = 0;
+function showBrightness({ brightness }) {
+  if (ui.panel === 'center' && ui.view === 'brightness') {
+    // Moving the slider under the pointer would fight the drag.
+    if (performance.now() - brightnessDraggedAt > 600) {
+      showCenterBrightness(brightness);
+    }
+    return;
+  }
+  flashLevel('brightness', brightness);
+}
+
+function showCenterBrightness(brightness) {
+  setSlider($('#center-brightness'), brightness);
+  $('#center-brightness-value').textContent = String(brightness);
+}
+
+$('#center-brightness').addEventListener('input', (event) => {
+  const brightness = Number(event.target.value);
+  brightnessDraggedAt = performance.now();
+  $('#center-brightness-value').textContent = String(brightness);
+  invoke('set_brightness', { brightness }).catch(console.error);
+});
 
 function showCenterVolume(volume) {
   setSlider($('#center-volume'), volume);
@@ -1285,12 +1344,25 @@ function refreshCenter() {
   updateWeatherTile();
   updateNotificationTile();
   updateSaverTile();
+  updateBrightnessTile();
 }
 
 function updateWeatherTile() {
   const ready = weather.status === 'ready';
   $('#tile-weather-icon').src = `icons/${(ready && weather.icon) || 'clear-day'}.png`;
   $('#tile-weather-temp').textContent = ready && weather.temperature !== null ? degrees(weather.temperature) : '';
+}
+
+// Only built-in screens have a brightness Windows can change.
+async function updateBrightnessTile() {
+  let state = null;
+  try {
+    state = await invoke('get_brightness');
+  } catch {
+    state = null;
+  }
+  $('#tile-brightness').disabled = state === null;
+  return state;
 }
 
 async function updateSaverTile() {
@@ -1307,6 +1379,15 @@ async function updateSaverTile() {
 
 const tileActions = {
   weather: () => openPanel('weather'),
+  brightness: async () => {
+    showView('brightness');
+    const state = await updateBrightnessTile();
+    if (state) {
+      showCenterBrightness(state.brightness);
+    } else {
+      $('#center-brightness-value').textContent = '--';
+    }
+  },
   volume: async () => {
     showView('volume');
     try {
@@ -1474,6 +1555,7 @@ async function start() {
     }),
     listen('theme', ({ payload }) => setTheme(payload)),
     listen('volume', ({ payload }) => showVolume(payload)),
+    listen('brightness', ({ payload }) => showBrightness(payload)),
     listen('battery', ({ payload }) => showBattery(payload)),
     listen('weather', ({ payload }) => showWeather(payload)),
     listen('notification', ({ payload }) => showNotification(payload)),

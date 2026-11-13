@@ -147,7 +147,7 @@ body {
 #bar,
 #toast,
 #switcher,
-#volume-flash,
+#level-flash,
 .panel,
 [data-view] {
   animation: enter 0.42s var(--spring) both;
@@ -175,6 +175,7 @@ body {
 .tiles > :nth-child(5) { animation-delay: 80ms; }
 .tiles > :nth-child(6) { animation-delay: 100ms; }
 .tiles > :nth-child(7) { animation-delay: 120ms; }
+.tiles > :nth-child(8) { animation-delay: 140ms; }
 
 /* ---- Icons and glyphs ---- */
 
@@ -440,7 +441,7 @@ input[type="search"]::-webkit-search-cancel-button {
   transform: translateX(16px);
 }
 
-/* A bar that fills to a level, used for the volume flash. */
+/* A bar that fills to a level, used for the volume and brightness flash. */
 .meter {
   flex: 1;
   height: 6px;
@@ -668,7 +669,7 @@ input[type="search"]::-webkit-search-cancel-button {
   transform-origin: 0 50%;
 }
 
-/* ---- Switcher and volume flash ---- */
+/* ---- Switcher and level flash ---- */
 
 #switcher {
   display: flex;
@@ -682,7 +683,7 @@ input[type="search"]::-webkit-search-cancel-button {
   max-width: 45%;
 }
 
-#volume-flash {
+#level-flash {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1096,7 +1097,7 @@ input[type="search"]::-webkit-search-cancel-button {
 
 .panel > .tiles {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(8, 1fr);
   gap: 6px;
 }
 

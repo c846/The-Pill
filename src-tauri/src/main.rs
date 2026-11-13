@@ -5,6 +5,7 @@ mod apps;
 mod audio;
 mod backdrop;
 mod battery;
+mod brightness;
 mod cleanup;
 mod dnd;
 mod hotkeys;
@@ -45,6 +46,7 @@ fn main() {
             backdrop::start();
             notifications::start();
             weather::start();
+            brightness::start();
             apps::preload();
             Ok(())
         })
@@ -53,6 +55,8 @@ fn main() {
             backdrop::get_theme,
             audio::get_volume,
             audio::set_volume,
+            brightness::get_brightness,
+            brightness::set_brightness,
             battery::get_battery,
             media::get_media,
             media::control_media,

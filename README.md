@@ -9,7 +9,7 @@ This is a rewrite of the Electron version for speed and low idle usage. The pill
 ## Using the pill
 
 - Hover over the small pill at the top of the screen to open it. Click a button to open its panel.
-- Click the date and time to open the **Pill Center**, with weather, volume, night light, battery saver, Windows Settings, power options and recent notifications.
+- Click the date and time to open the **Pill Center**, with weather, volume, brightness, night light, battery saver, Windows Settings, power options and recent notifications.
 - Right-click the pill to open **Pill settings**, where you choose what the bar shows and set the weather zip code.
 
 | Shortcut | What it does |
@@ -18,6 +18,7 @@ This is a rewrite of the Electron version for speed and low idle usage. The pill
 | **Alt + Space** | Opens the app switcher. Keep holding Alt and press Space to step through open apps, then release Alt to switch. Press Esc to cancel. Hold Space down instead of tapping it to open the Open apps panel, with a live preview of every open app; click one, or pick it with the arrow keys and Enter. |
 | **Alt + Q** | Opens app search. Press Enter to open the first match. |
 | **Volume keys** | Change the volume and show it on the pill instead of the Windows volume flyout. |
+| **Brightness keys** | Show the new screen brightness on the pill. Laptop firmware handles these keys before any app can, so the Windows brightness flyout still appears too. |
 
 While the pill is running, the Windows taskbar is hidden and apps can use the whole screen. Pressing the Windows key on its own, or Ctrl+Esc, doesn't open Start, but Windows key shortcuts such as Win+E and Win+Shift+S still work. Alt+Tab and Win+Tab (Task View) are turned off too; use the pill's Alt+Space switcher instead.
 
@@ -52,6 +53,7 @@ npm run build   # build the installer into src-tauri/target/release/bundle/nsis
 | `cleanup.rs` | Putting the taskbar and Do Not Disturb back when the pill closes, and the watchdog that does it after a crash |
 | `worker.rs` | One background thread that runs Windows requests in order |
 | `audio.rs` | System volume and the volume keys |
+| `brightness.rs` | Screen brightness, and showing changes made with the brightness keys |
 | `media.rs` | Music playing in any app |
 | `notifications.rs` | Reading Windows notifications |
 | `apps.rs` | Start menu apps and launching them |

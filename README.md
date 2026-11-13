@@ -65,4 +65,4 @@ npm run build   # build the installer into src-tauri/target/release/bundle/nsis
 | `battery.rs` | Battery charge |
 | `weather.rs` | Weather from weather.gov |
 
-The installer adds The Pill to the apps that start when you sign in, and removes it when uninstalled.
+The installer adds The Pill to the apps that start when you sign in, and removes it when uninstalled. It makes no Start menu or desktop shortcut, because the pill is meant to run in the background rather than be opened like an app; it still appears under Installed apps in Settings so it can be uninstalled. `src-tauri/installer.nsi` is Tauri's own installer template with those shortcuts taken out (its header says what changed), and `src-tauri/installer-hooks.nsh` adds the startup entry.

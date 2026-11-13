@@ -3,6 +3,10 @@
 ; taskbar and switch Do Not Disturb off again, so the hooks do that themselves.
 !macro NSIS_HOOK_POSTINSTALL
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "The Pill" '"$INSTDIR\${MAINBINARYNAME}.exe"'
+  ; The pill isn't meant to be opened like an app (installer.nsi makes no shortcuts), so remove the Start menu
+  ; and desktop shortcuts that earlier installers made.
+  Delete "$SMPROGRAMS\${PRODUCTNAME}.lnk"
+  Delete "$DESKTOP\${PRODUCTNAME}.lnk"
   ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --restore'
 !macroend
 

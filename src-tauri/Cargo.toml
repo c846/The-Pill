@@ -16,6 +16,8 @@ tokio = { version = "1", features = ["time", "sync", "macros"] }
 # Uses Windows' own TLS (Schannel), so nothing extra has to be compiled for HTTPS.
 reqwest = { version = "0.12", default-features = false, features = ["default-tls"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Declaring a COM interface Windows doesn't publish (Do Not Disturb) needs this directly.
+windows-core = "0.62"
 
 [dependencies.windows]
 version = "0.62"
@@ -31,6 +33,7 @@ features = [
   "Win32_Graphics_Gdi",
   "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
+  "Win32_Security",
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_Com_StructuredStorage",

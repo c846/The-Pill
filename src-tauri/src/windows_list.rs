@@ -165,6 +165,11 @@ unsafe fn file_description(path: &str) -> Option<String> {
     None
 }
 
+/// Whether the window was in the latest list, so the page can only point at windows it was shown.
+pub fn is_listed(hwnd: i64) -> bool {
+    LISTED.lock().unwrap().contains(&hwnd)
+}
+
 pub fn activate(handle: i64) -> bool {
     let hwnd = HWND(handle as isize as *mut c_void);
     unsafe {

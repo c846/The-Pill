@@ -1032,6 +1032,66 @@ input[type="search"]::-webkit-search-cancel-button {
   gap: 4px;
 }
 
+/* Open apps: a grid of live previews. Windows draws each preview over its box, so tiles never move or
+   scale under it. */
+
+#running-list {
+  display: grid;
+  grid-template-columns: repeat(var(--columns, 3), minmax(0, 1fr));
+  gap: 4px;
+  max-height: 372px;
+}
+
+.window-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 5px;
+}
+
+.window-tile:active:not(:disabled) {
+  transform: none;
+}
+
+.window-tile.selected,
+.window-tile.selected:hover {
+  background-color: var(--tint-strong);
+}
+
+.window-preview {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 10;
+  border-radius: 6px;
+  background-color: var(--tint);
+  overflow: hidden;
+}
+
+/* Shown until the preview arrives, and for apps Windows has no picture of, like some minimized ones. */
+.window-preview-name {
+  max-width: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+.window-tile.live .window-preview {
+  background-color: transparent;
+}
+
+.window-tile.live .window-preview-name {
+  visibility: hidden;
+}
+
+.window-name {
+  font-size: 11.5px;
+  text-align: center;
+}
+
 /* Pill Center */
 
 .panel > .tiles {

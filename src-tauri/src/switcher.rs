@@ -1,15 +1,20 @@
 //! The Alt+Space app switcher. Keep holding Alt and press Space to step through open apps, release Alt to
-//! switch, or press Esc to cancel. The whole flow runs here; the page only shows the selected app.
+//! switch, or press Esc to cancel. Holding Space down instead opens the Open apps panel, with a live preview
+//! of each app, on the selected one. The whole flow runs here; the page only shows the selected app.
 
 use crate::util::emit;
 use crate::{pill, windows_list, worker};
 use serde::Serialize;
 use std::sync::Mutex;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
 const ALT_CHECK_INTERVAL: Duration = Duration::from_millis(30);
+/// Space held this long is a hold rather than a tap.
+const HOLD_TIME: Duration = Duration::from_millis(350);
+const VK_SPACE: i32 = 0x20;
+const VK_MENU: i32 = 0x12;
 
 struct State {
     active: bool,
@@ -67,8 +72,14 @@ pub fn step() {
     });
 }
 
-/// Only runs while the switcher is open.
+fn key_down(key: i32) -> bool {
+    unsafe { GetAsyncKeyState(key) as u16 & 0x8000 != 0 }
+}
+
+/// Only runs while the switcher is open, watching for Alt to be released or Space to be held.
 fn watch_alt(session: u64) {
+    // The press that opened the switcher is already down.
+    let mut space_since = Some(Instant::now());
     loop {
         sleep(ALT_CHECK_INTERVAL);
         {
@@ -77,11 +88,30 @@ fn watch_alt(session: u64) {
                 return;
             }
         }
-        let alt_down = unsafe { GetAsyncKeyState(0x12) } as u16 & 0x8000 != 0;
-        if !alt_down {
+        if !key_down(VK_MENU) {
             return worker::submit(move || finish(Some(session), true));
         }
+        if key_down(VK_SPACE) {
+            if space_since.get_or_insert_with(Instant::now).elapsed() >= HOLD_TIME {
+                return worker::submit(move || expand(session));
+            }
+        } else {
+            space_since = None;
+        }
     }
+}
+
+/// Hands over to the Open apps panel, which stays open until an app is picked or it is dismissed.
+fn expand(session: u64) {
+    let index = {
+        let mut state = STATE.lock().unwrap();
+        if !state.active || state.session != session {
+            return;
+        }
+        state.active = false;
+        state.index
+    };
+    emit("switcher-expand", index);
 }
 
 /// Switches to the selected app, or when cancelled, back to the app the user was in.

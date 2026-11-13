@@ -171,6 +171,10 @@ let closeTimer;
 function render() {
   const expanded = Boolean(ui.hover || ui.panel || isPinned());
   pill.classList.toggle('idle-hidden', ui.idleHidden);
+  // Window previews draw over the page, so they go before anything else takes their place.
+  if (!expanded || !previewsWanted()) {
+    hidePreviews();
+  }
 
   if (!expanded) {
     // Closing fades the content while the glass shrinks around it, then hides it. What was showing is
@@ -352,6 +356,9 @@ window.addEventListener('blur', () => {
 document.addEventListener('contextmenu', (event) => event.preventDefault());
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') {
+    if (ui.panel === 'running' && !ui.switcher) {
+      onRunningKey(event);
+    }
     return;
   }
   if (ui.switcher) {
@@ -361,7 +368,7 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-function openPanel(name) {
+function openPanel(name, runningSelection = -1) {
   if (ui.panel === 'music' && name !== 'music') {
     stopMusic();
   }
@@ -376,7 +383,7 @@ function openPanel(name) {
   } else if (name === 'apps') {
     showApps();
   } else if (name === 'running') {
-    showRunning();
+    showRunning(runningSelection);
   } else if (name === 'weather') {
     renderWeather();
   } else if (name === 'center') {
@@ -761,31 +768,151 @@ $('#apps-search').addEventListener('keydown', (event) => {
 });
 
 // ---- Open apps ----
+//
+// A grid of the open apps, each with a live preview. Windows draws the previews itself, on top of the page,
+// at boxes the page reports (see previews.rs). Since they don't move with the page, they are placed once the
+// panel has stopped moving, moved when the grid scrolls, and taken away before the panel closes or is covered.
 
-async function showRunning() {
+let runningSelected = -1;
+let runningColumns = 3;
+let previewsOn = false;
+let previewVersion = 0;
+let previewFrame = 0;
+
+/** Holding Alt+Space opens the panel from the keyboard, with the switcher's app selected. */
+function openRunning(selected) {
+  openPanel('running', selected);
+  ui.keyboard = true;
+  render();
+}
+
+async function showRunning(selected = -1) {
+  runningSelected = selected;
+  let windows;
   try {
-    const windows = await invoke('get_open_windows');
-    $('#running-list').replaceChildren(...windows.map((window) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = window.title === window.appName ? window.appName : `${window.appName} · ${window.title}`;
-      button.title = window.title;
-      button.addEventListener('click', async () => {
-        try {
-          await invoke('activate_window', { hwnd: window.hwnd });
-          closeAll();
-        } catch (error) {
-          console.error('Could not switch apps:', error);
-          showRunning();
-        }
-      });
-      return button;
-    }));
-    $('#running-empty').hidden = windows.length > 0;
+    windows = await invoke('get_open_windows');
+    $('#running-empty').textContent = 'No open apps';
   } catch (error) {
-    $('#running-list').replaceChildren();
-    $('#running-empty').hidden = false;
+    windows = [];
     $('#running-empty').textContent = String(error);
+  }
+  if (ui.panel !== 'running') {
+    return;
+  }
+  runningColumns = windows.length <= 2 ? 2 : windows.length <= 9 ? 3 : 4;
+  runningSelected = Math.min(runningSelected, windows.length - 1);
+  const list = $('#running-list');
+  list.style.setProperty('--columns', runningColumns);
+  list.replaceChildren(...windows.map((window, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'window-tile';
+    button.classList.toggle('selected', index === runningSelected);
+    button.dataset.hwnd = window.hwnd;
+    button.title = window.title === window.appName ? window.appName : `${window.appName} · ${window.title}`;
+    const preview = document.createElement('span');
+    preview.className = 'window-preview';
+    const fallback = document.createElement('span');
+    fallback.className = 'window-preview-name';
+    fallback.textContent = window.appName;
+    preview.append(fallback);
+    const name = document.createElement('span');
+    name.className = 'window-name ellipsis';
+    name.textContent = window.appName;
+    button.append(preview, name);
+    button.addEventListener('click', () => activateRunning(window.hwnd));
+    return button;
+  }));
+  $('#running-empty').hidden = windows.length > 0;
+  placePreviews(true);
+}
+
+async function activateRunning(hwnd) {
+  hidePreviews();
+  try {
+    await invoke('activate_window', { hwnd });
+    closeAll();
+  } catch (error) {
+    console.error('Could not switch apps:', error);
+    showRunning(runningSelected);
+  }
+}
+
+function selectRunning(index) {
+  const tiles = $('#running-list').children;
+  if (tiles.length === 0) {
+    return;
+  }
+  runningSelected = Math.min(tiles.length - 1, Math.max(0, index));
+  for (const [i, tile] of [...tiles].entries()) {
+    tile.classList.toggle('selected', i === runningSelected);
+  }
+  tiles[runningSelected].scrollIntoView({ block: 'nearest' });
+}
+
+function previewsWanted() {
+  return ui.panel === 'running' && !ui.toast && !ui.switcher && !isIdle();
+}
+
+/** Puts the previews over their boxes. When the panel has just appeared, waits for it to stop moving. */
+async function placePreviews(settle = false) {
+  const version = ++previewVersion;
+  if (settle) {
+    const panel = $('[data-panel="running"]');
+    await Promise.all(panel.getAnimations().map((animation) => animation.finished.catch(() => {})));
+  }
+  if (version !== previewVersion || !previewsWanted()) {
+    return;
+  }
+  const list = $('#running-list');
+  const view = list.getBoundingClientRect();
+  const slots = [];
+  for (const tile of list.children) {
+    const box = tile.firstElementChild.getBoundingClientRect();
+    // Windows can't cut a preview off at the grid's edge, so one scrolled partly out of view waits.
+    if (box.top >= view.top - 1 && box.bottom <= view.bottom + 1) {
+      slots.push({ hwnd: Number(tile.dataset.hwnd), x: box.left, y: box.top, width: box.width, height: box.height });
+    }
+  }
+  previewsOn = true;
+  try {
+    const shown = new Set(await invoke('show_previews', { slots }));
+    for (const tile of list.children) {
+      tile.classList.toggle('live', shown.has(Number(tile.dataset.hwnd)));
+    }
+  } catch (error) {
+    console.error('Could not show previews:', error);
+  }
+}
+
+function hidePreviews() {
+  previewVersion += 1;
+  cancelAnimationFrame(previewFrame);
+  if (previewsOn) {
+    previewsOn = false;
+    invoke('hide_previews').catch(console.error);
+  }
+}
+
+$('#running-list').addEventListener('scroll', () => {
+  cancelAnimationFrame(previewFrame);
+  previewFrame = requestAnimationFrame(() => placePreviews());
+}, { passive: true });
+
+function onRunningKey(event) {
+  const moves = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -runningColumns, ArrowDown: runningColumns };
+  if (event.key in moves) {
+    event.preventDefault();
+    selectRunning(runningSelected < 0 ? 0 : runningSelected + moves[event.key]);
+  } else if (event.key === 'Enter' && runningSelected >= 0) {
+    event.preventDefault();
+    const tile = $('#running-list').children[runningSelected];
+    if (tile) {
+      activateRunning(Number(tile.dataset.hwnd));
+    }
+  } else if (event.key === ' ') {
+    // The Space that opened the panel is still down and repeating.
+    event.preventDefault();
   }
 }
 
@@ -1356,6 +1483,10 @@ async function start() {
       ui.switcher = null;
       render();
       scheduleCollapse();
+    }),
+    listen('switcher-expand', ({ payload }) => {
+      ui.switcher = null;
+      openRunning(payload);
     }),
   ]);
   setTheme(await invoke('get_theme'));

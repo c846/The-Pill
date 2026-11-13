@@ -15,9 +15,15 @@ This is a rewrite of the Electron version for speed and low idle usage. The pill
 | Shortcut | What it does |
 |---|---|
 | **Alt + W** | Hides or shows the idle bar. A hidden bar still opens when you hover over it. |
-| **Alt + Space** | Opens the app switcher. Keep holding Alt and press Space to step through open apps, then release Alt to switch. Press Esc to cancel. |
+| **Alt + Space** | Opens the app switcher. Keep holding Alt and press Space to step through open apps, then release Alt to switch. Press Esc to cancel. Hold Space down instead of tapping it to open the Open apps panel, with a live preview of every open app; click one, or pick it with the arrow keys and Enter. |
 | **Alt + Q** | Opens app search. Press Enter to open the first match. |
 | **Volume keys** | Change the volume and show it on the pill instead of the Windows volume flyout. |
+
+While the pill is running, the Windows taskbar is hidden and apps can use the whole screen. Pressing the Windows key on its own, or Ctrl+Esc, doesn't open Start, but Windows key shortcuts such as Win+E and Win+Shift+S still work. Alt+Tab and Win+Tab (Task View) are turned off too; use the pill's Alt+Space switcher instead.
+
+The pill also turns on Do Not Disturb while it runs, so notifications appear only in the pill and not as Windows popups. If Do Not Disturb was already on, the pill leaves it alone. A few older apps announce things with tray icon balloons, which Windows drops while Do Not Disturb is on, so those don't reach the pill.
+
+The taskbar comes back and Do Not Disturb switches off when the pill closes, even if it crashes or is ended in Task Manager. A second, small `the-pill.exe` waits in the background to make sure of that. If something is ever left behind, running `the-pill.exe --restore` puts it back.
 
 In the apps panel, right-click an app to add it to your favorites, and right-click a favorite to remove it.
 
@@ -41,6 +47,9 @@ npm run build   # build the installer into src-tauri/target/release/bundle/nsis
 | `pill.rs` | Fitting the window to the pill and keeping it on top |
 | `backdrop.rs` | Choosing the light or dark look from the screen around the pill |
 | `hotkeys.rs` | Global shortcuts, power events (battery changes, waking from sleep), and other windows coming to the front |
+| `taskbar.rs` | Hiding the taskbar and keeping Start shut |
+| `dnd.rs` | Turning on Do Not Disturb so Windows shows no popups of its own |
+| `cleanup.rs` | Putting the taskbar and Do Not Disturb back when the pill closes, and the watchdog that does it after a crash |
 | `worker.rs` | One background thread that runs Windows requests in order |
 | `audio.rs` | System volume and the volume keys |
 | `media.rs` | Music playing in any app |
@@ -48,6 +57,7 @@ npm run build   # build the installer into src-tauri/target/release/bundle/nsis
 | `apps.rs` | Start menu apps and launching them |
 | `windows_list.rs` | Open windows and switching to them |
 | `switcher.rs` | The Alt+Space switcher |
+| `previews.rs` | Live window previews in the Open apps panel, drawn by Windows itself |
 | `nightlight.rs` | Night light on/off and strength |
 | `power.rs` | Battery saver, lock, shut down and restart |
 | `battery.rs` | Battery charge |
